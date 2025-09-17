@@ -1,0 +1,436 @@
+import React, { Component, useState } from 'react';
+import LayoutPage from './LayoutPage';
+import { connect } from "react-redux";
+import { Row, Col, Tooltip, message, notification, Upload, Spin, Button, InputNumber, Space, Form, Input, Select, Checkbox } from 'antd';
+import { UploadOutlined } from "@ant-design/icons";
+import { Collapse } from 'antd';
+import {
+  requestMMTStatus,
+  requestBuildModel,
+  requestBuildStatus,
+  requestAllReports,
+} from "../actions";
+import {
+  FORM_LAYOUT,
+  SERVER_URL,
+  FEATURES_OPTIONS,
+} from "../constants";
+
+const { Panel } = Collapse;
+
+// TODO: if building a model is done, jump to ModelsPage -> seems to be difficult!
+
+class BuildADPage extends Component {
+  constructor(props) {
+    super(props);
+    this.state = {
+      attackDataset: null,
+      attackPcapFile: null,
+      normalDataset: null,
+      normalPcapFile: null,
+      featureList: "Raw Features",
+      training_ratio: 0.7,
+      training_parameters: {
+        nb_epoch_cnn: 2,
+        nb_epoch_sae: 5,
+        batch_size_cnn: 32,
+        batch_size_sae: 16,
+      },
+      isRunning: props.buildStatus.isRunning,
+    };
+    this.handleButtonBuild = this.handleButtonBuild.bind(this);
+  }
+
+  componentDidMount() {
+    this.props.fetchAllReports();
+  }
+
+  async requestMMTStatus() {
+    const url = `${SERVER_URL}/api/mmt`;
+    const response = await fetch(url);
+    const data = await response.json();
+    if (data.error) {
+      throw data.error;
+    }
+    console.log(data.mmtStatus);
+    return data.mmtStatus;
+  };
+
+  async requestMMTOffline(file) {
+    const url = `${SERVER_URL}/api/mmt/offline`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ fileName: file }),
+    });
+    const data = await response.json();
+    console.log(`MMT offline analysis of pcap file ${file}`);
+    return data;
+  }
+  
+  async handleButtonBuild() {
+    const delay = ms => new Promise(res => setTimeout(res, ms));
+    const { 
+      attackDataset, 
+      normalDataset,
+      attackPcapFile,
+      normalPcapFile,
+      training_ratio, 
+      training_parameters,
+      isRunning,
+    } = this.state; 
+    const { mmtStatus } = this.props;
+    console.log(`mmtStatus: ${mmtStatus.isRunning}`);
+    let datasets;
+    if (!isRunning) {
+      console.log("update isRunning state!");
+      this.setState({ isRunning: true });        
+      this.intervalId = setInterval(() => { // start interval when button is clicked
+        this.props.fetchBuildStatus();
+      }, 5000);   
+
+      if (attackDataset && normalDataset) {
+        datasets = [
+          { datasetId: attackDataset, isAttack: true },
+          { datasetId: normalDataset, isAttack: false },
+        ];
+      } else if (attackPcapFile && normalPcapFile) {
+        await this.requestMMTOffline(attackPcapFile.name);
+        const attackMMTStatus = await this.requestMMTStatus();
+        this.setState({ attackDataset: `report-${attackMMTStatus.sessionId}` });
+
+        await delay(3000); // TODO: improve?
+        await this.requestMMTOffline(normalPcapFile.name);
+        const normalMMTStatus = await this.requestMMTStatus();
+        this.setState({ normalDataset: `report-${normalMMTStatus.sessionId}` });
+        
+        const { attackDataset, normalDataset } = this.state;
+        console.log({ attackDataset, normalDataset });
+
+        datasets = [
+          { datasetId: attackDataset, isAttack: true },
+          { datasetId: normalDataset, isAttack: false },
+        ];
+
+        await delay(5000); // TODO: test again option of uploading pcaps
+      }
+
+      if (!datasets) {
+        console.error('No valid datasets or pcap files provided');
+        return;
+      }
+
+      const buildConfig = {
+        buildConfig: {
+          datasets,
+          training_ratio,
+          training_parameters,
+        }
+      };
+      console.log(buildConfig);
+
+      this.props.fetchBuildModel(datasets, training_ratio, training_parameters);
+    }
+  }
+
+  componentDidUpdate(prevProps, prevState) {
+    const { isRunning } = this.state;
+    const { buildStatus } = this.props;
+    console.log(`buildStatus: ${buildStatus.isRunning}`);
+    console.log(`build isRunning: ${isRunning}`);
+    if (prevProps.buildStatus.isRunning !== this.props.buildStatus.isRunning) {
+      console.log('isRunning has been changed');
+      this.setState({ isRunning: this.props.buildStatus.isRunning });
+      if (!this.props.buildStatus.isRunning) {
+        let builtModelId = this.props.buildStatus.lastBuildId;
+        console.log('isRunning changed from True to False');  
+        clearInterval(this.intervalId);
+        notification.success({
+          message: 'Success',
+          description: `The model ${builtModelId} was built successfully!`,
+          placement: 'topRight',
+        });
+        this.setState({
+          attackDataset: null, 
+          normalDataset: null,
+        });
+      }
+    }
+  }
+
+  beforeUploadPcap = (file) => {
+    const isPCAP = file.name.endsWith('.pcap');
+    console.log(file.name.endsWith('.pcap'));
+    if (!isPCAP) {
+      message.error(`${file.name} is not a pcap file`);
+    }
+    return isPCAP ? true : Upload.LIST_IGNORE;
+  }
+
+  handleUploadPcap = async (info, typePcap) => {
+    const { status, response, name } = info.file;
+    console.log({ status, response, name });
+  
+    if (status === 'uploading') {
+      console.log(`Uploading ${name}`);
+    } else if (status === 'done') {
+      const pcapTypeToFileState = {
+        'attack': 'attackPcapFile',
+        'normal': 'normalPcapFile'
+      };
+      
+      if (pcapTypeToFileState[typePcap]) {
+        this.setState({ [pcapTypeToFileState[typePcap]]: info.file.originFileObj });
+        console.log(`Uploaded successfully ${name}`);
+      } else {
+        console.error('Type of pcap file is invalid');
+      }
+    } else if (status === 'error') {
+      console.error('Pcap file upload failed');
+    }
+  };
+
+  processUploadPcap = async ({ file, onProgress, onSuccess, onError }) => {
+    const formData = new FormData();
+    formData.append('pcapFile', file);
+
+    try {
+      const response = await fetch(`${SERVER_URL}/api/pcaps`, {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        onSuccess(data, response);
+        console.log(`Uploaded successfully ${file.name}`);
+      } else {
+        const error = await response.text();
+        onError(new Error(error));
+        console.error(error);
+      }
+    } catch (error) {
+      onError(error);
+      console.error(error);
+    }
+  }
+
+  render() {
+    const { mmtStatus, buildStatus, reports } = this.props;
+    //console.log(reports);
+    const { 
+      attackPcapFile,
+      normalPcapFile,
+      isRunning 
+    } = this.state;
+
+    console.log({ attackPcapFile, normalPcapFile, isRunning });
+
+    const reportsOptions = reports ? reports.map(report => ({
+      value: report,
+      label: report,
+    })) : [];
+
+    const featureOptions = FEATURES_OPTIONS ? FEATURES_OPTIONS.map(feature => ({
+      value: feature,
+      label: feature,
+    })) : [];
+
+    // TODO: disable button Upload pcaps if users selected already datasets and vice versa
+    return (
+      <LayoutPage pageTitle="Build Models" pageSubTitle="Build a new AI model for anomaly detection">
+        <Row>
+        <Col span={12}>
+        <Form {...FORM_LAYOUT} name="control-hooks" style={{ maxWidth: 700 }}>
+          <Form.Item
+            label="Malicious Dataset"
+            name="attackDataset"
+            rules={[
+              {
+                required: true,
+                message: 'Please select an malicious dataset!',
+              },
+            ]}
+          >
+            <Tooltip title="Select MMT's analyzing reports of malicious traffic.">
+              <Select
+                placeholder="Select malicious MMT reports ..."
+                value={this.state.attackDataset}
+                showSearch allowClear
+                onChange={v => this.setState({ attackDataset: v })}
+                options={reportsOptions}
+                disabled={this.state.attackPcapFile !== null}
+              />
+            </Tooltip>
+            <Upload
+              beforeUpload={this.beforeUploadPcap}
+              action={`${SERVER_URL}/api/pcaps`}
+              onChange={(info) => this.handleUploadPcap(info, "attack")} 
+              customRequest={this.processUploadPcap}
+              onRemove={() => {
+                this.setState({ attackPcapFile: null });
+              }}
+            >
+              <Button icon={<UploadOutlined />} style={{ marginTop: '5px' }} disabled={!!this.state.attackDataset}>
+                Upload pcaps only
+              </Button>
+            </Upload>
+          </Form.Item>
+
+          <Form.Item label="Normal Dataset" name="normalDataset"
+            rules={[
+              {
+                required: true,
+                message: 'Please select a normal dataset!',
+              },
+            ]}
+          >
+            <Tooltip title="Select MMT's analyzing reports of normal traffic.">
+              <Select
+                placeholder="Select normal MMT reports ..."
+                value={this.state.normalDataset}
+                showSearch allowClear
+                onChange={v => this.setState({ normalDataset: v })}
+                options={reportsOptions}
+                disabled={this.state.normalPcapFile !== null}
+              />
+            </Tooltip>
+            <Upload
+              beforeUpload={this.beforeUploadPcap}
+              action={`${SERVER_URL}/api/pcaps`}
+              onChange={(info) => this.handleUploadPcap(info, "normal")} 
+              customRequest={this.processUploadPcap}
+              onRemove={() => {
+                this.setState({ normalPcapFile: null });
+              }}
+            >
+              <Button icon={<UploadOutlined />} style={{ marginTop: '5px' }} disabled={!!this.state.normalDataset}>
+                Upload pcaps only
+              </Button>
+            </Upload>
+          </Form.Item>
+          <Form.Item label="Feature List" name="featureList">
+            <Tooltip title="Select feature lists used to build models.">
+              <Select
+                value={this.state.featureList}
+                onChange={v => this.setState({ featureList: v })}
+                options={featureOptions}
+              />
+            </Tooltip>
+          </Form.Item>
+          <Form.Item label="Training Ratio" name="training_ratio">
+            <Tooltip title="The training ratio refers to the proportion of data used for training a machine learning model compared to the total dataset. The training ratio is 0.7, meaning 70% for training and 30% for testing/validation.">
+              <InputNumber
+                name="training_ratio"
+                value={this.state.training_ratio}
+                min={0} max={1} step={0.1} defaultValue={0.7}
+                onChange={v => this.setState({ training_ratio: v })}
+              />
+            </Tooltip>
+          </Form.Item>
+          <Collapse>
+            <Panel header="Training Parameters">
+              <Form.Item label="Number of Epochs (CNN)" name="nb_epoch_cnn">
+                <Tooltip title="In convolutional neural networks (CNN), the number of epochs determines how many times the model will iterate over the training data during the training process.">
+                  <InputNumber
+                    name="nb_epoch_cnn"
+                    value={this.state.nb_epoch_cnn}
+                    min={1} max={1000} defaultValue={2}
+                    onChange={(v) =>
+                      this.setState({
+                        training_parameters: { ...this.state.training_parameters, nb_epoch_cnn: v },
+                      })
+                    }
+                  />
+                </Tooltip>
+              </Form.Item>
+              <Form.Item label="Number of Epochs (SAE)" name="nb_epoch_sae">
+                <Tooltip title="In Stacked Autoencoder (SAE), the number of epochs determines how many times this encoding-decoding process is repeated during training.">
+                  <InputNumber
+                    name="nb_epoch_sae"
+                    value={this.state.nb_epoch_sae}
+                    min={1} max={1000} defaultValue={5}
+                    onChange={(v) =>
+                      this.setState({
+                        training_parameters: { ...this.state.training_parameters, nb_epoch_sae: v },
+                      })
+                    }
+                  />
+                </Tooltip>
+              </Form.Item>
+              <Form.Item label="Batch Size (CNN)" name="batch_size_cnn">
+                <Tooltip title="Batch size in CNN refers to the number of samples that are processed together in a single forward and backward pass during each epoch of training. The training dataset is divided into smaller batches, and the model's parameters are updated based on the average gradients computed from each batch.">
+                  <InputNumber
+                    name="batch_size_cnn"
+                    value={this.state.batch_size_cnn}
+                    min={1} max={1000} defaultValue={32}
+                    onChange={(v) =>
+                      this.setState({
+                        training_parameters: { ...this.state.training_parameters, batch_size_cnn: v },
+                      })
+                    }
+                  />
+                </Tooltip>
+              </Form.Item>
+              <Form.Item label="Batch Size (SAE)" name="batch_size_sae">
+                <Tooltip title="Batch size in a SAE determines the number of samples processed together in each training iteration.">
+                  <InputNumber
+                    name="batch_size_sae"
+                    value={this.state.batch_size_sae}
+                    min={1} max={1000} defaultValue={16}
+                    onChange={(v) =>
+                      this.setState({
+                        training_parameters: { ...this.state.training_parameters, batch_size_sae: v },
+                      })
+                    }
+                  />
+                </Tooltip>
+              </Form.Item>
+            </Panel>
+          </Collapse>
+          <div style={{ textAlign: 'center' }}>
+            <Button
+              type="primary"
+              style={{ marginTop: '16px' }}
+              disabled={ isRunning || 
+                !((this.state.attackDataset && this.state.normalDataset) ||
+                (this.state.attackPcapFile && this.state.normalPcapFile))
+              }
+              onClick={this.handleButtonBuild}
+            >
+              Build Model
+              {isRunning && 
+                <Spin size="large" style={{ marginBottom: '8px' }}>
+                  <div className="content" />
+                </Spin>
+              }
+            </Button>
+          </div>
+        </Form>
+        </Col>
+        <Col span={12} style={{ display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
+          <Tooltip title="This is the description of the image">
+            <img src="../../img/architecture.png" style={{ width: '40%' }} />
+          </Tooltip>
+        </Col>
+        </Row>
+      </LayoutPage>
+    );
+  }
+}
+
+const mapPropsToStates = ({ mmtStatus, buildStatus, reports }) => ({
+  mmtStatus, buildStatus, reports,
+});
+
+const mapDispatchToProps = (dispatch) => ({
+  fetchMMTStatus: () => dispatch(requestMMTStatus()),
+  fetchBuildStatus: () => dispatch(requestBuildStatus()),
+  fetchBuildModel: (datasets, ratio, params) =>
+    dispatch(requestBuildModel({ datasets, ratio, params })),
+  fetchAllReports: () => dispatch(requestAllReports()),
+});
+
+export default connect(mapPropsToStates, mapDispatchToProps)(BuildADPage);

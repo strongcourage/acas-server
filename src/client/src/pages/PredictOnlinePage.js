@@ -1,0 +1,458 @@
+import React, { Component } from 'react';
+import LayoutPage from './LayoutPage';
+import { Tooltip, message, Upload, Spin, Button, Form, Select, Checkbox, InputNumber, Table, Divider } from 'antd';
+import { connect } from "react-redux";
+import {
+  FORM_LAYOUT,
+  SERVER_URL,
+} from "../constants";
+import {
+  requestApp,
+  requestMMTStatus,
+  requestAllModels,
+  requestPredict,
+  requestPredictStatus,
+} from "../actions";
+import { requestPredictStats } from "../api";
+import { Pie, RingProgress } from '@ant-design/plots';
+import {
+  getFilteredModelsOptions,
+  getLastPath,
+} from "../utils";
+
+let isModelIdPresent = getLastPath() !== "online";
+
+class PredictOnlinePage extends Component {
+  constructor(props) {
+    super(props);
+    this.state = {
+      modelId: null,
+      interface: null,
+      interfacesOptions: [],
+      windowSec: 10,
+      totalDurationSec: 60,
+      isCapturing: false,
+      status: null,
+      lastProcessedFile: null,
+      processedFiles: [],
+      isProcessingSlice: false,
+      isRunning: props.predictStatus ? props.predictStatus.isRunning : false,
+      predictStats: null,
+      aggregateNormal: 0,
+      aggregateMalicious: 0,
+      lastSliceStats: null,
+      processedCsvs: [],
+    };
+    this.handleButtonStart = this.handleButtonStart.bind(this);
+    this.handleButtonStop = this.handleButtonStop.bind(this);
+    this.pollStatus = this.pollStatus.bind(this);
+  }
+
+  componentDidMount() {
+    let modelId = getLastPath();
+    if (isModelIdPresent) {
+      this.setState({ modelId });
+    }
+    this.props.fetchApp();
+    this.props.fetchAllModels();
+    this.fetchInterfacesAndSetOptions();
+  }
+
+  async componentDidUpdate(prevProps, prevState) {
+    if (this.props.app !== prevProps.app && !isModelIdPresent) {
+      this.setState({ modelId: null });
+    }
+
+    if (prevProps.predictStatus && prevProps.predictStatus.isRunning !== this.props.predictStatus.isRunning) {
+      this.setState({ isRunning: this.props.predictStatus.isRunning });
+      if (!this.props.predictStatus.isRunning) {
+        if (this.predictTimer) clearInterval(this.predictTimer);
+        message.success('Online window prediction completed');
+        const lastPredictId = this.props.predictStatus.lastPredictedId;
+        try {
+          const predictStats = await requestPredictStats(lastPredictId);
+          // Parse counts and update aggregates
+          const values = predictStats.trim().split('\n')[1].split(',');
+          const normal = parseInt(values[0], 10) || 0;
+          const malicious = parseInt(values[1], 10) || 0;
+          this.setState(prev => ({
+            predictStats,
+            lastSliceStats: predictStats,
+            aggregateNormal: prev.aggregateNormal + normal,
+            aggregateMalicious: prev.aggregateMalicious + malicious,
+          }));
+        } catch (e) {
+          console.error('Failed to load prediction stats:', e);
+        }
+      }
+    }
+  }
+
+  componentWillUnmount() {
+    if (this.statusTimer) clearInterval(this.statusTimer);
+    if (this.predictTimer) clearInterval(this.predictTimer);
+  }
+
+  async requestMMTStatusLocal() {
+    const url = `${SERVER_URL}/api/mmt`;
+    const response = await fetch(url);
+    const data = await response.json();
+    if (data.error) throw data.error;
+    return data.mmtStatus;
+  };
+
+  async requestNetworkInterfaces() {
+    const url = `${SERVER_URL}/api/predict/interfaces`;
+    const response = await fetch(url);
+    const data = await response.json();
+    if (data.error) throw data.error;
+    return data.interfaces;
+  }
+
+  async fetchInterfacesAndSetOptions() {
+    let interfacesOptions = [];
+    try {
+      const interfaces = await this.requestNetworkInterfaces();
+      interfacesOptions = interfaces.map(i => {
+        const dev = String(i).split(/\s*-\s*/)[0];
+        return { label: i, value: dev };
+      });
+    } catch (error) {
+      console.error('Error:', error);
+    }
+    this.setState({ interfacesOptions });
+  }
+
+  async requestMMTOfflineByPath(filePath, outputSessionId) {
+    const url = `${SERVER_URL}/api/mmt/offline`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filePath, outputSessionId })
+    });
+    const data = await response.json();
+    return data;
+  }
+
+  async pollStatus() {
+    try {
+      const res = await fetch(`${SERVER_URL}/api/online/status`);
+      const status = await res.json();
+      const prev = this.state.status || {};
+      const hasChanged = (
+        prev.running !== status.running ||
+        prev.pid !== status.pid ||
+        prev.lastFile !== status.lastFile ||
+        prev.prevFile !== status.prevFile
+      );
+      if (hasChanged) {
+        this.setState({ status, isCapturing: status.running, sessionDir: status.sessionDir || this.state.sessionDir });
+      }
+      const { isRunning, modelId, isProcessingSlice, processedFiles } = this.state;
+      // Fetch ordered file list and process the oldest unprocessed stable file
+      const filesRes = await fetch(`${SERVER_URL}/api/online/files`);
+      const filesData = await filesRes.json();
+      const filesAsc = Array.isArray(filesData.files) ? filesData.files : [];
+      if (!isRunning && !isProcessingSlice && modelId && filesAsc.length > 0) {
+        const next = filesAsc.find(f => {
+          const base = String(f.file).split('/').pop();
+          return processedFiles.indexOf(base) === -1 && (f.ageMs === null || f.ageMs >= 1500);
+        });
+        if (next) {
+          const base = String(next.file).split('/').pop();
+          this.setState({ lastProcessedFile: next.file, processedFiles: [...processedFiles, base], isProcessingSlice: true });
+          await this.processSlice(next.file);
+        }
+      }
+      // Stop polling only when capture stopped and there are no more unprocessed files
+      const remaining = filesAsc.some(f => processedFiles.indexOf(String(f.file).split('/').pop()) === -1);
+      if (!status.running && !remaining && this.statusTimer) {
+        clearInterval(this.statusTimer);
+        this.statusTimer = null;
+      }
+    } catch (e) {
+      console.warn('Failed to poll online status:', e.message);
+    }
+  }
+
+  async processSlice(filePath) {
+    try {
+      const outputSessionId = this.state.status && this.state.status.outputSessionId ? this.state.status.outputSessionId : null;
+      await this.requestMMTOfflineByPath(filePath, outputSessionId);
+      // Use the shared reportId if provided, else fallback to session-based id
+      const groupedReportId = outputSessionId ? `report-${outputSessionId}` : null;
+      // Fetch CSV list using same endpoint as offline
+      let csvList = [];
+      for (let i = 0; i < 10; i++) { // up to ~10s
+        const res = await fetch(`${SERVER_URL}/api/reports/${groupedReportId || ''}`);
+        const data = await res.json();
+        csvList = (data && data.csvFiles) ? data.csvFiles : [];
+        if (Array.isArray(csvList) && csvList.length > 0) break;
+        await new Promise(r => setTimeout(r, 1000));
+      }
+      if (!Array.isArray(csvList) || csvList.length === 0) {
+        console.error('No CSV reports found for', groupedReportId || 'latest');
+        this.setState({ isProcessingSlice: false });
+        return;
+      }
+      // Choose the next unprocessed CSV (lexicographic order is chronological)
+      const sortedCsv = [...csvList].sort();
+      const nextCsv = sortedCsv.find(name => this.state.processedCsvs.indexOf(name) === -1);
+      if (!nextCsv) {
+        this.setState({ isProcessingSlice: false });
+        return;
+      }
+      // Dispatch predict using same flow as offline
+      this.props.fetchPredict(this.state.modelId, groupedReportId, nextCsv);
+      this.setState(prev => ({ processedCsvs: [...prev.processedCsvs, nextCsv] }));
+      if (!this.state.isRunning) {
+        this.setState({ isRunning: true });
+        if (this.predictTimer) clearInterval(this.predictTimer);
+        this.predictTimer = setInterval(() => {
+          this.props.fetchPredictStatus();
+        }, 2000);
+      }
+    } catch (e) {
+      console.error('processSlice error:', e);
+    } finally {
+      this.setState({ isProcessingSlice: false });
+    }
+  }
+
+  async handleButtonStart() {
+    const { modelId, interface: iface, windowSec, totalDurationSec } = this.state;
+    if (!modelId || !iface) return;
+    try {
+      const res = await fetch(`${SERVER_URL}/api/online/start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ iface, windowSec, totalDurationSec }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json();
+      message.success(`Started capture on ${iface} (pid ${data.pid})`);
+      this.setState({ isCapturing: true, status: data, sessionDir: data.sessionDir, lastProcessedFile: null, processedFiles: [], processedCsvs: [], predictStats: null, aggregateNormal: 0, aggregateMalicious: 0, lastSliceStats: null });
+      if (this.statusTimer) clearInterval(this.statusTimer);
+      this.statusTimer = setInterval(this.pollStatus, 2000);
+    } catch (e) {
+      message.error(`Failed to start capture: ${e.message}`);
+    }
+  }
+
+  async handleButtonStop() {
+    try {
+      const res = await fetch(`${SERVER_URL}/api/online/stop`, { method: 'POST' });
+      const data = await res.json();
+      this.setState({ isCapturing: false, status: { ...(this.state.status || {}), running: false } });
+      // Keep polling so we can finish processing remaining files; pollStatus will stop itself when done
+      if (!this.statusTimer) {
+        this.statusTimer = setInterval(this.pollStatus, 2000);
+      }
+      // Kick an immediate poll to start post-stop processing
+      this.pollStatus();
+      message.success('Stopped capture. Finishing remaining files...');
+    } catch (e) {
+      message.error(`Failed to stop capture: ${e.message}`);
+    }
+  }
+
+  render() {
+    const { app, models } = this.props;
+    const { modelId, interfacesOptions, isCapturing, windowSec, totalDurationSec, status, predictStats, aggregateNormal, aggregateMalicious, lastSliceStats } = this.state;
+
+    const modelsOptions = getFilteredModelsOptions(app, models);
+
+    const subTitle = isModelIdPresent ?
+      `Online prediction using the model ${modelId}` :
+      'Online prediction using models';
+
+    // Prefer aggregated results when available, otherwise show last slice
+    let tableConfig, maliciousFlows, predictOutput;
+    let normalFlows = 0;
+    let totalFlows = 0;
+    if (aggregateNormal > 0 || aggregateMalicious > 0) {
+      normalFlows = aggregateNormal;
+      maliciousFlows = aggregateMalicious;
+      totalFlows = normalFlows + maliciousFlows;
+      const dataSource = [{ key: 'agg', "Normal flows": String(normalFlows), "Malicious flows": String(maliciousFlows), "Total flows": String(totalFlows) }];
+      const columns = [
+        { title: 'Normal flows', dataIndex: 'Normal flows', align: 'center' },
+        { title: 'Malicious flows', dataIndex: 'Malicious flows', align: 'center' },
+        { title: 'Total flows', dataIndex: 'Total flows', align: 'center' },
+      ];
+      tableConfig = { dataSource, columns, pagination: false };
+    } else if (lastSliceStats) {
+      const values = lastSliceStats.trim().split('\n')[1].split(',');
+      const n = parseInt(values[0], 10) || 0;
+      const m = parseInt(values[1], 10) || 0;
+      normalFlows = n; maliciousFlows = m; totalFlows = n + m;
+      const dataSource = [{ key: 'last', "Normal flows": values[0], "Malicious flows": values[1], "Total flows": values[2] }];
+      const columns = [
+        { title: 'Normal flows', dataIndex: 'Normal flows', align: 'center' },
+        { title: 'Malicious flows', dataIndex: 'Malicious flows', align: 'center' },
+        { title: 'Total flows', dataIndex: 'Total flows', align: 'center' },
+      ];
+      tableConfig = { dataSource, columns, pagination: false };
+    }
+    predictOutput = maliciousFlows > 0
+      ? 'The model predicts that the given network traffic contains Malicious activity'
+      : 'The model predicts that the given network traffic is Normal';
+
+    const donutData = [
+      { type: 'Normal', value: normalFlows },
+      { type: 'Malicious', value: maliciousFlows || 0 },
+    ];
+    const donutConfig = {
+      data: donutData,
+      angleField: 'value',
+      colorField: 'type',
+      radius: 1,
+      innerRadius: 0.64,
+      legend: { position: 'right' },
+      label: {
+        type: 'inner',
+        offset: '-50%',
+        content: ({ percent }) => `${(percent * 100).toFixed(0)}%`,
+        style: { fontSize: 14, textAlign: 'center' },
+      },
+      color: ['#5B8FF9', '#F4664A'],
+      interactions: [{ type: 'element-active' }],
+      statistic: {
+        title: false,
+        content: { content: totalFlows ? `${totalFlows}` : '', style: { fontSize: 16 } },
+      },
+    };
+
+    const maliciousRate = totalFlows > 0 ? maliciousFlows / totalFlows : 0;
+    const ringConfig = {
+      height: 140,
+      width: 140,
+      autoFit: false,
+      percent: maliciousRate,
+      color: ['#F4664A', '#E8EDF3'],
+      statistic: {
+        title: { formatter: () => 'Malicious', style: { fontSize: 12 } },
+        content: { formatter: () => `${(maliciousRate * 100).toFixed(1)}%`, style: { fontSize: 16 } },
+      },
+    };
+
+    return (
+      <LayoutPage pageTitle="Predict Online" pageSubTitle={subTitle}>
+        <Divider orientation="left">
+          <h1 style={{ fontSize: '24px' }}>Prediction Parameters</h1>
+        </Divider>
+        <Form {...FORM_LAYOUT} name="control-hooks" style={{ maxWidth: 700 }}>
+          <Form.Item name="model" label="Model"
+            style={{ flex: 'none', marginBottom: 10 }}
+            rules={[
+              {
+                required: true,
+                message: 'Please select a model!',
+              },
+            ]}
+          >
+            <Tooltip title="Select a model to perform online predictions.">
+              <Select placeholder="Select a model ..."
+                style={{ width: '100%' }}
+                allowClear showSearch
+                value={this.state.modelId}
+                disabled={isModelIdPresent}
+                onChange={(value) => {
+                  this.setState({ modelId: value });
+                  console.log(`Select model ${value}`);
+                }}
+                options={modelsOptions}
+              />
+            </Tooltip>
+          </Form.Item>
+          <Form.Item name="interface" label="Network interface"
+            style={{ flex: 'none', marginBottom: 10 }}
+            rules={[
+              {
+                required: true,
+                message: 'Please select a network interface!',
+              },
+            ]}
+          >
+            <Tooltip title="Select a network interface to perform online predictions.">
+              <Select placeholder="Select a network interface ..."
+                style={{ width: '100%' }}
+                allowClear showSearch
+                value={this.state.interface}
+                onChange={v => this.setState({ interface: v })}
+                options={interfacesOptions}
+              />
+            </Tooltip>
+          </Form.Item>
+          <Form.Item name="windowSec" label="Window (s)" style={{ flex: 'none', marginBottom: 10 }}>
+            <InputNumber min={3} max={60} value={windowSec} onChange={(v) => this.setState({ windowSec: v || 10 })} />
+          </Form.Item>
+          <Form.Item name="totalDurationSec" label="Total Duration (s)" style={{ flex: 'none', marginBottom: 10 }}>
+            <InputNumber min={windowSec} max={3600} value={totalDurationSec} onChange={(v) => this.setState({ totalDurationSec: v || windowSec })} />
+          </Form.Item>
+          <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
+            <Button
+              type="primary"
+              onClick={this.handleButtonStart}
+              disabled={ isCapturing || !this.state.modelId || !this.state.interface }
+            >
+              Start
+            </Button>
+            <Button
+              onClick={this.handleButtonStop}
+              disabled={!isCapturing}
+            >
+              Stop
+            </Button>
+          </div>
+        </Form>
+
+        <Divider orientation="left">
+          <h1 style={{ fontSize: '24px' }}>Prediction Results</h1>
+        </Divider>
+        {(modelId && (aggregateNormal > 0 || aggregateMalicious > 0 || lastSliceStats)) && (
+          <>
+            <div style={{ marginTop: '10px' }}>
+              <h3 style={{ fontSize: '22px' }}>{predictOutput}</h3>
+              <div style={{ display: 'flex', gap: 24, alignItems: 'center', flexWrap: 'wrap' }}>
+                <div>
+                  <Pie {...donutConfig} style={{ width: 320, height: 220 }} />
+                </div>
+                <div>
+                  <RingProgress {...ringConfig} />
+                </div>
+                <div>
+                  <Table {...tableConfig} style={{ width: '500px' }} />
+                </div>
+              </div>
+            </div>
+          </>
+        )}
+
+        {status && (
+          <div style={{ marginTop: 16, fontSize: 12, color: '#888' }}>
+            <div>Running: {String(status.running)}</div>
+            <div>PID: {status.pid || '-'}</div>
+            <div>Session dir: {status.sessionDir || '-'}</div>
+            <div>Last file: {status.lastFile || '-'}</div>
+          </div>
+        )}
+      </LayoutPage>
+    );
+  }
+}
+
+const mapPropsToStates = ({ app, models, mmtStatus, predictStatus }) => ({
+  app, models, mmtStatus, predictStatus,
+});
+
+const mapDispatchToProps = (dispatch) => ({
+  fetchApp: () => dispatch(requestApp()),
+  fetchAllModels: () => dispatch(requestAllModels()),
+  fetchMMTStatus: () => dispatch(requestMMTStatus()),
+  fetchPredict: (modelId, reportId, reportFileName) =>
+    dispatch(requestPredict({modelId, reportId, reportFileName})),
+  fetchPredictStatus: () => dispatch(requestPredictStatus()),
+});
+
+export default connect(mapPropsToStates, mapDispatchToProps)(PredictOnlinePage);
