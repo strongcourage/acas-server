@@ -32,6 +32,7 @@ import {
   getLastPath,
 } from "../utils";
 import { handleMitigationAction } from '../utils/mitigation';
+import { buildAttackTable } from '../utils/attacksTable';
 
 let isModelIdPresent = getLastPath() !== "offline";
 
@@ -42,8 +43,8 @@ class PredictOfflinePage extends Component {
       modelId: null,
       testingPcapFile: null,
       testingDataset: null,
-      isRunning: props.predictStatus.isRunning,
-      isMMTRunning: props.mmtStatus.isRunning,
+      isRunning: (props.predictStatus && props.predictStatus.isRunning) ? props.predictStatus.isRunning : false,
+      isMMTRunning: (props.mmtStatus && props.mmtStatus.isRunning) ? props.mmtStatus.isRunning : false,
       predictStats: null,
       attackCsv: null,
       attackRows: [],
@@ -54,9 +55,34 @@ class PredictOfflinePage extends Component {
       limeModalVisible: false,
       limeValues: [],
     };
-    this.handlePredictOffline = this.handlePredictOffline.bind(this);
-    this.handleTablePredictStats = this.handleTablePredictStats.bind(this);
-    this.runLimeForSample = this.runLimeForSample.bind(this);
+    // No binds needed; methods are arrow functions
+  }
+
+  // Extract flow details (IPs, ports, rates, sessionId) from a record
+  computeFlowDetails = (record) => {
+    const keyList = Object.keys(record).filter(k => k !== 'key');
+    const findKey = (patterns) => keyList.find(k => patterns.some(p => p.test(k)));
+    const srcKey = findKey([
+      /src.*ip/i, /source.*ip/i, /^ip[_-]?src$/i, /^src[_-]?ip$/i, /(src|source).*addr/i, /^saddr$/i
+    ]);
+    const dstKey = findKey([
+      /dst.*ip/i, /dest.*ip/i, /destination.*ip/i, /^ip[_-]?dst$/i, /^dst[_-]?ip$/i, /(dst|dest|destination).*addr/i, /^daddr$/i
+    ]);
+    const combinedIpKey = (!srcKey && !dstKey) ? findKey([/^ip$/i, /ip.*pair/i, /ip.*addr/i, /address/i]) : null;
+    const deriveIps = (rec) => {
+      if (!combinedIpKey) return { srcIp: null, dstIp: null };
+      const text = String(rec[combinedIpKey] || '');
+      const ipv4s = text.match(/(?:\d{1,3}\.){3}\d{1,3}/g) || [];
+      return { srcIp: ipv4s[0] || null, dstIp: ipv4s[1] || null };
+    };
+    const derived = deriveIps(record);
+    const srcIp = srcKey ? record[srcKey] : (derived?.srcIp || null);
+    const dstIp = dstKey ? record[dstKey] : (derived?.dstIp || null);
+    const sessionId = record['ip.session_id'] || record['session_id'] || null;
+    const dport = record['dport_g'] ?? record['dport_le'] ?? record['dport'] ?? null;
+    const pktsRate = record['pkts_rate'] ?? null;
+    const byteRate = record['byte_rate'] ?? null;
+    return { srcIp, dstIp, sessionId, dport, pktsRate, byteRate };
   }
 
   // Strict IPv4 validation (each octet 0-255)
@@ -129,7 +155,7 @@ class PredictOfflinePage extends Component {
     }
   }
 
-  async handlePredictOffline() {
+  handlePredictOffline = async () => {
     const delay = ms => new Promise(res => setTimeout(res, ms));
     const {
       modelId,
@@ -194,7 +220,7 @@ class PredictOfflinePage extends Component {
     }
   }
 
-  handleTablePredictStats(csvData) {
+  handleTablePredictStats = (csvData) => {
     const values = csvData.trim().split('\n')[1].split(',');
     const normalFlows = parseInt(values[0], 10);
     const maliciousFlows = parseInt(values[1], 10);
@@ -232,35 +258,104 @@ class PredictOfflinePage extends Component {
     return { tableConfig, normalFlows, maliciousFlows };
   }
 
-  handleMitigation = (key, record, srcKey, dstKey, derived) => {
-    const srcIp = srcKey ? record[srcKey] : (derived?.srcIp || null);
-    const dstIp = dstKey ? record[dstKey] : (derived?.dstIp || null);
-    const sessionId = record['ip.session_id'] || record['session_id'] || null;
-    const dport = record['dport_g'] ?? record['dport_le'] ?? record['dport'] ?? null;
-    const pktsRate = record['pkts_rate'] ?? null;
-    const byteRate = record['byte_rate'] ?? null;
-
-    // Navigate to XAI LIME if requested
-    if (key === 'explain-lime') {
-      const modelId = this.state.modelId;
-      const predictionId = this.props.predictStatus?.lastPredictedId || '';
-      if (modelId && sessionId !== null && sessionId !== undefined && sessionId !== '') {
-        const qp = new URLSearchParams({ sampleId: String(sessionId) });
-        if (predictionId) qp.set('predictionId', predictionId);
-        const target = `/xai/lime/${encodeURIComponent(modelId)}?${qp.toString()}`;
-        window.location.href = target;
-      }
-      return;
+  async componentDidUpdate(prevProps, prevState) {
+    if (this.props.app !== prevProps.app && !isModelIdPresent) {
+      this.setState({ modelId: null });
     }
 
-    // Navigate to XAI SHAP if requested
-    if (key === 'explain-shap') {
+    const prevPS = prevProps && prevProps.predictStatus ? prevProps.predictStatus : {};
+    const currPS = this.props && this.props.predictStatus ? this.props.predictStatus : {};
+    if ((prevPS.isRunning || false) !== (currPS.isRunning || false)) {
+      console.log('isRunning has been changed');
+      this.setState({ isRunning: !!currPS.isRunning });
+      if (!currPS.isRunning) {
+        clearInterval(this.intervalId);
+        notification.success({
+          message: 'Success',
+          description: 'Make predictions successfully!',
+          placement: 'topRight',
+        });
+        this.setState({
+          testingDataset: null,
+          testingPcapFile: null,
+        });
+        const lastPredictId = currPS.lastPredictedId || '';
+        if (lastPredictId) {
+          // Fetch stats and attacks
+          const predictStats = await requestPredictStats(lastPredictId);
+          let attackCsv = null;
+          try {
+            attackCsv = await requestPredictionAttack(lastPredictId);
+          } catch (e) {
+            console.warn('No attack CSV available:', e.message);
+          }
+          let attackRows = [];
+          let attackFlowColumns = [];
+          let mitigationColumns = [];
+          if (attackCsv) {
+            const built = buildAttackTable({
+              csvString: attackCsv,
+              onAction: (key, record) => this.onMitigationAction(key, record),
+              buildMenu: (record, onAction) => {
+                const { srcIp, dstIp, dport } = this.computeFlowDetails(record);
+                const validSrc = this.isValidIPv4(srcIp);
+                const validDst = this.isValidIPv4(dstIp);
+                return (
+                  <Menu onClick={({ key }) => onAction && onAction(key, record)}>
+                    <Menu.Item key="explain-shap">Explain (XAI SHAP)</Menu.Item>
+                    <Menu.Item key="explain-lime">Explain (XAI LIME)</Menu.Item>
+                    <Menu.Divider />
+                    <Menu.Item key="block-src-ip" disabled={!validSrc}>
+                      {`Block source IP${validSrc ? ` ${srcIp}` : ''}`}
+                    </Menu.Item>
+                    <Menu.Item key="block-dst-ip" disabled={!validDst}>
+                      {`Block destination IP${validDst ? ` ${dstIp}` : ''}`}
+                    </Menu.Item>
+                    <Menu.Divider />
+                    <Menu.Item key="block-dst-port" disabled={!dport}>
+                      {`Block destination port${dport ? ` ${dport}/tcp` : ''}`}
+                    </Menu.Item>
+                    <Menu.Item key="block-ip-port-src" disabled={!(validSrc && dport)}>
+                      {`Block${validSrc && dport ? ` ${srcIp}:${dport}/tcp` : ' srcIP:dstPort/tcp'}`}
+                    </Menu.Item>
+                    <Menu.Item key="block-ip-port-dst" disabled={!(validDst && dport)}>
+                      {`Block${validDst && dport ? ` ${dstIp}:${dport}/tcp` : ' dstIP:dstPort/tcp'}`}
+                    </Menu.Item>
+                    <Menu.Divider />
+                    <Menu.Item key="drop-session" disabled={!(validSrc || validDst)}>
+                      {`Drop session${validDst ? ` ${dstIp}` : validSrc ? ` ${srcIp}` : ''}`}
+                    </Menu.Item>
+                    <Menu.Item key="rate-limit-src" disabled={!(validSrc && dport)}>
+                      {`Rate-limit source${validSrc && dport ? ` ${srcIp}:${dport}/tcp` : ''}`}
+                    </Menu.Item>
+                    <Menu.Divider />
+                    <Menu.Item key="send-nats">Send flow to NATS</Menu.Item>
+                  </Menu>
+                );
+              }
+            });
+            attackRows = built.rows;
+            attackFlowColumns = built.flowColumns;
+            mitigationColumns = built.mitigationColumns;
+          }
+          this.setState({ predictStats, attackCsv, attackRows, attackFlowColumns, mitigationColumns });
+        }
+      }
+    }
+  }
+
+  onMitigationAction = (key, record) => {
+    // Derive common fields similar to PredictOnlinePage
+    const { srcIp, dstIp, sessionId, dport, pktsRate, byteRate } = this.computeFlowDetails(record);
+
+    if (key === 'explain-lime' || key === 'explain-shap') {
       const modelId = this.state.modelId;
       const predictionId = this.props.predictStatus?.lastPredictedId || '';
-      if (modelId && sessionId !== null && sessionId !== undefined && sessionId !== '') {
+      if (modelId && sessionId) {
         const qp = new URLSearchParams({ sampleId: String(sessionId) });
         if (predictionId) qp.set('predictionId', predictionId);
-        const target = `/xai/shap/${encodeURIComponent(modelId)}?${qp.toString()}`;
+        const base = key === 'explain-lime' ? '/xai/lime/' : '/xai/shap/';
+        const target = `${base}${encodeURIComponent(modelId)}?${qp.toString()}`;
         window.location.href = target;
       }
       return;
@@ -274,7 +369,7 @@ class PredictOfflinePage extends Component {
       dport,
       pktsRate,
       byteRate,
-      isValidIPv4: this.isValidIPv4.bind(this),
+      isValidIPv4: this.isValidIPv4,
       flowRecord: record,
       natsSubject: 'ndr.malicious.flow'
     });
