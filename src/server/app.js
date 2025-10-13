@@ -56,6 +56,7 @@ const securityRouter = require('./routes/security');
 const onlineRouter = require('./routes/online');
 const assistantRouter = require('./routes/assistant');
 const featuresRouter = require('./routes/features');
+const queueRouter = require('./routes/queue');
 const earlyPredictionRouter = require('./routes/early-prediction');
 
 const app = express();
@@ -130,6 +131,7 @@ app.use('/api/security', securityRouter);
 app.use('/api/online', onlineRouter);
 app.use('/api/assistant', assistantRouter);
 app.use('/api/features', featuresRouter);
+app.use('/api/queue', queueRouter);
 app.use('/api/early-prediction', earlyPredictionRouter);
 
 // Serve early-prediction artifacts (figures and JSON) as static assets
