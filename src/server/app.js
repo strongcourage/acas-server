@@ -58,6 +58,8 @@ const assistantRouter = require('./routes/assistant');
 const featuresRouter = require('./routes/features');
 const queueRouter = require('./routes/queue');
 const earlyPredictionRouter = require('./routes/early-prediction');
+const dpiRouter = require('./routes/dpi');
+const networkRouter = require('./routes/network');
 
 // Initialize queue workers (this starts all background workers)
 require('./queue/workers');
@@ -142,6 +144,8 @@ app.use('/api/assistant', assistantRouter);
 app.use('/api/features', featuresRouter);
 app.use('/api/queue', queueRouter);
 app.use('/api/early-prediction', earlyPredictionRouter);
+app.use('/api/dpi', dpiRouter);
+app.use('/api/network', networkRouter);
 
 // Serve early-prediction artifacts (figures and JSON) as static assets
 // Path: src/server/early-prediction/figures -> /static/early-prediction
