@@ -1,21 +1,4 @@
 services:
-  redis:
-    container_name: resilmesh_sap_ndr_redis
-    image: redis:7-alpine
-    restart: unless-stopped
-    command: redis-server --appendonly yes
-    ports:
-      - "127.0.0.1:6379:6379"  # Bind to localhost only
-    networks:
-      - resilmesh_network
-    volumes:
-      - redis_data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 3s
-      retries: 3
-
   ndr_server:
     container_name: resilmesh_sap_ndr_server
     image: mont/ndr-server
@@ -40,9 +23,6 @@ services:
       - ./src/server/deep-learning/attacks:/ndr-app/src/server/deep-learning/attacks
       - ./src/server/mmt/outputs:/ndr-app/src/server/mmt/outputs
       - ./src/server/mmt/pcaps:/ndr-app/src/server/mmt/pcaps
-    depends_on:
-      redis:
-        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:31057/health"]
       interval: 30s
@@ -102,8 +82,6 @@ services:
       start_period: 10s
 
 volumes:
-  redis_data:
-    driver: local
   caddy_data:
     driver: local
   caddy_config:

@@ -31,16 +31,16 @@ export NODE_ENV=${NODE_ENV:-production}
 
 echo "Environment: DOCKER_ENV=$DOCKER_ENV, USE_SUDO=$USE_SUDO, NODE_ENV=$NODE_ENV"
 
-# Wait for Redis if in Docker
+# Wait for Valkey (shared Redis-compatible server) if in Docker
 if [ "$DOCKER_ENV" = "true" ] && [ ! -z "$REDIS_URL" ]; then
-    echo "Waiting for Redis..."
+    echo "Waiting for Valkey server..."
     timeout=30
     while [ $timeout -gt 0 ]; do
         if nc -z redis 6379 2>/dev/null; then
-            echo "Redis is ready!"
+            echo "Valkey server is ready!"
             break
         fi
-        echo "Waiting for Redis... ($timeout seconds left)"
+        echo "Waiting for Valkey server... ($timeout seconds left)"
         sleep 2
         timeout=$((timeout-2))
     done
