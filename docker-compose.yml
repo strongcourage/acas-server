@@ -43,9 +43,8 @@ services:
         REACT_APP_ADMIN_EMAILS: ${REACT_APP_ADMIN_EMAILS:-}
         REACT_APP_ADMIN_USER_IDS: ${REACT_APP_ADMIN_USER_IDS:-}
         REACT_APP_ADMIN_ORG_ID: ${REACT_APP_ADMIN_ORG_ID:-}
-    # Port 3000 exposed to host for direct access (Caddy optional)
     ports:
-      - "3000:3000"  # Keep accessible for direct frontend access
+      - "3000:3000"  # Frontend accessible on localhost:3000
     networks:
       - resilmesh_network
     depends_on:
@@ -56,35 +55,3 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
-
-  caddy:
-    container_name: resilmesh_sap_ndr_caddy
-    image: caddy:2-alpine
-    restart: unless-stopped
-    ports:
-      - "80:80"     # HTTP (for Let's Encrypt challenge and redirect)
-      - "443:443"   # HTTPS
-      - "443:443/udp" # HTTP/3 (QUIC)
-    networks:
-      - resilmesh_network
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
-      - caddy_logs:/var/log/caddy
-    depends_on:
-      - ndr_client
-    healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:80"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
-
-volumes:
-  caddy_data:
-    driver: local
-  caddy_config:
-    driver: local
-  caddy_logs:
-    driver: local
