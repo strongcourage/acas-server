@@ -7,7 +7,7 @@ services:
       context: .
       dockerfile: Dockerfile.server
     ports:
-      - "31057:31057"  # Keep accessible for API access
+      - "31057:31057"
     networks:
       - resilmesh_network
     env_file:
@@ -44,7 +44,7 @@ services:
         REACT_APP_ADMIN_USER_IDS: ${REACT_APP_ADMIN_USER_IDS:-}
         REACT_APP_ADMIN_ORG_ID: ${REACT_APP_ADMIN_ORG_ID:-}
     ports:
-      - "3000:3000"  # Frontend accessible on localhost:3000
+      - "3000:3000"
     networks:
       - resilmesh_network
     depends_on:
