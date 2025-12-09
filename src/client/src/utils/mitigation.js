@@ -1,5 +1,5 @@
 import React from 'react';
-import { Modal, message, notification, Radio, Button } from 'antd';
+import { Modal, message, notification, Radio, Button, Input, Form } from 'antd';
 import { SERVER_URL } from '../constants';
 import { computeFlowDetails } from './flowDetails';
 
@@ -84,21 +84,26 @@ export async function handleBulkMitigationAction({ actionKey, rows, isValidIPv4,
     if (dport !== undefined && dport !== null && dport !== '') dports.add(String(dport));
   });
 
-  const perform = async () => {
+  const perform = async (natsConfig) => {
     switch (actionKey) {
       case 'send-nats-bulk': {
         try {
+          const { natsUrl, subject } = natsConfig || {};
           const res = await fetch(`${SERVER_URL}/api/security/nats-publish/bulk`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ payloads: list.map((row) => { const copy = { ...row }; delete copy.key; return copy; }) }),
+            body: JSON.stringify({
+              payloads: list.map((row) => { const copy = { ...row }; delete copy.key; return copy; }),
+              natsUrl: natsUrl || undefined,
+              subject: subject || undefined
+            }),
           });
           if (!res.ok) throw new Error(await res.text());
           const data = await res.json();
           const ok = Number(data.published || 0);
           const fail = Number(data.failed || 0);
           if (fail === 0) {
-            notification.success({ message: 'Sent to NATS', description: `Published ${ok} ${noun(ok)}` , placement: 'topRight' });
+            notification.success({ message: 'Sent to NATS', description: `Published ${ok} ${noun(ok)} to ${subject || 'server default subject'}` , placement: 'topRight' });
           } else if (ok === 0) {
             notification.error({ message: 'NATS publish failed', description: `All ${fail} ${noun(fail)} failed`, placement: 'topRight' });
           } else {
@@ -140,6 +145,19 @@ export async function handleBulkMitigationAction({ actionKey, rows, isValidIPv4,
     showCommandsModal({ title: titleOverride || titleMap[actionKey], preview: cmdPreview });
     return;
   }
+
+  // Show NATS config modal for send-nats-bulk action
+  if (actionKey === 'send-nats-bulk') {
+    showNatsConfigModal()
+      .then(config => perform(config))
+      .catch(err => {
+        if (err.message !== 'Cancelled') {
+          message.error('Failed to get NATS configuration');
+        }
+      });
+    return;
+  }
+
   Modal.confirm({ title: titleOverride || titleMap[actionKey] || 'Confirm bulk action', content: lines.join('\n'), onOk: perform });
 }
 
@@ -247,17 +265,101 @@ export async function rateLimitIp(ipAddress, byteRate, pktsRate) {
   }
 }
 
-export async function sendToNats({ payload }) {
+// NATS Configuration Modal Component
+function NatsConfigModal({ onSubmit, onCancel }) {
+  const [form] = Form.useForm();
+  const [loading, setLoading] = React.useState(false);
+
+  const handleOk = async () => {
+    try {
+      const values = await form.validateFields();
+      setLoading(true);
+      await onSubmit(values);
+      setLoading(false);
+    } catch (error) {
+      console.error('Validation failed:', error);
+      setLoading(false);
+    }
+  };
+
+  return (
+    <Modal
+      title="NATS Configuration"
+      open={true}
+      onOk={handleOk}
+      onCancel={onCancel}
+      confirmLoading={loading}
+      width={600}
+    >
+      <Form
+        form={form}
+        layout="vertical"
+        initialValues={{
+          natsUrl: '',
+          subject: 'ndr.malicious.flow'
+        }}
+      >
+        <Form.Item
+          label="NATS URL"
+          name="natsUrl"
+          help="Leave empty to use server default configuration"
+        >
+          <Input placeholder="nats://localhost:4222" />
+        </Form.Item>
+        <Form.Item
+          label="NATS Subject/Topic"
+          name="subject"
+          rules={[{ required: true, message: 'Please enter NATS subject' }]}
+        >
+          <Input placeholder="ndr.malicious.flow" />
+        </Form.Item>
+      </Form>
+    </Modal>
+  );
+}
+
+// Show NATS configuration modal and return promise with config
+export function showNatsConfigModal() {
+  return new Promise((resolve, reject) => {
+    const div = document.createElement('div');
+    document.body.appendChild(div);
+
+    const cleanup = () => {
+      document.body.removeChild(div);
+    };
+
+    const handleSubmit = (config) => {
+      cleanup();
+      resolve(config);
+    };
+
+    const handleCancel = () => {
+      cleanup();
+      reject(new Error('Cancelled'));
+    };
+
+    const root = require('react-dom/client').createRoot(div);
+    root.render(
+      <NatsConfigModal onSubmit={handleSubmit} onCancel={handleCancel} />
+    );
+  });
+}
+
+export async function sendToNats({ payload, natsUrl, subject }) {
   try {
     const res = await fetch(`${SERVER_URL}/api/security/nats-publish`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ payload: (() => { const copy = { ...payload }; delete copy.key; return copy; })() }),
+      body: JSON.stringify({
+        payload: (() => { const copy = { ...payload }; delete copy.key; return copy; })(),
+        natsUrl,
+        subject
+      }),
     });
     if (!res.ok) throw new Error(await res.text());
     notification.success({
       message: 'Sent to NATS',
-      description: `Published to server default subject (env NATS_SUBJECT)`,
+      description: `Published to subject: ${subject || 'server default'}`,
       placement: 'topRight',
     });
   } catch (e) {
@@ -433,11 +535,13 @@ export function handleMitigationAction({ actionKey, srcIp, dstIp, sessionId, dpo
       break;
     case 'send-nats':
       if (flowRecord) {
-        Modal.confirm({
-          title: 'Confirm action: Send flow to NATS',
-          content: `Subject: "otics.ingest.>" (server default subject)`,
-          onOk: () => sendToNats({ payload: flowRecord })
-        });
+        showNatsConfigModal()
+          .then(config => sendToNats({ payload: flowRecord, natsUrl: config.natsUrl, subject: config.subject }))
+          .catch(err => {
+            if (err.message !== 'Cancelled') {
+              message.error('Failed to get NATS configuration');
+            }
+          });
       } else {
         message.warning('No flow data to send');
       }

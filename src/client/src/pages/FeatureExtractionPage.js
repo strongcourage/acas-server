@@ -20,6 +20,7 @@ import { buildAttackTable } from '../utils/attacksTable';
 import FeatureCharts from '../components/FeatureCharts';
 import FeatureDescriptions from '../components/FeatureDescriptions';
 import { getUserHeaders, fetchWithAuth } from '../utils/fetchWithAuth';
+import { showNatsConfigModal } from '../utils/mitigation';
 
 class FeatureExtractionPage extends Component {
   constructor(props) {
@@ -349,17 +350,39 @@ class FeatureExtractionPage extends Component {
       message.warning('No extracted features to send');
       return;
     }
+
     try {
+      const config = await showNatsConfigModal();
+      const { natsUrl, subject } = config;
+
       const res = await fetch(`${SERVER_URL}/api/security/nats-publish/flows`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId: featuresSessionId, fileName: featuresFileName, chunkLines: 1000 }),
+        body: JSON.stringify({
+          sessionId: featuresSessionId,
+          fileName: featuresFileName,
+          chunkLines: 1000,
+          natsUrl: natsUrl || undefined,
+          subject: subject || undefined
+        }),
       });
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
-      notification.success({ message: 'Sent flows to NATS', description: `Published in ${data.chunks} chunk(s)`, placement: 'topRight' });
+      notification.success({
+        message: 'Sent flows to NATS',
+        description: `Published in ${data.chunks} chunk(s) to ${subject || 'server default subject'}`,
+        placement: 'topRight'
+      });
     } catch (e) {
-      notification.error({ message: 'Failed to stream features to NATS', description: e.message || String(e), placement: 'topRight' });
+      if (e.message === 'Cancelled') {
+        // User cancelled the modal, do nothing
+        return;
+      }
+      notification.error({
+        message: 'Failed to stream features to NATS',
+        description: e.message || String(e),
+        placement: 'topRight'
+      });
     }
   }
 

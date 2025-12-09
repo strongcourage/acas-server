@@ -27,8 +27,8 @@ const { queueRuleBasedDetection, getJobStatus } = require('../queue/job-queue');
 // Default to sudo unless explicitly disabled; use non-interactive to avoid blocking
 const SUDO = USE_SUDO === 'false' ? '' : 'sudo -n ';
 
-async function getNatsConnection() {
-  const servers = NATS_URL || LOCAL_NATS_URL;
+async function getNatsConnection(customUrl) {
+  const servers = customUrl || NATS_URL || LOCAL_NATS_URL;
   const userIngestor = NATS_USER_INGESTOR || undefined;
   const passIngestor = NATS_PASS_INGESTOR || undefined;
   const opts = userIngestor && passIngestor
@@ -680,10 +680,10 @@ router.post('/block-ip', async (req, res) => {
 });
 
 // Stream extracted flows (features CSV) to NATS in chunks
-// Body: { sessionId?: string, reportId?: string, fileName: string, chunkLines?: number, subject?: string }
+// Body: { sessionId?: string, reportId?: string, fileName: string, chunkLines?: number, subject?: string, natsUrl?: string }
 router.post('/nats-publish/flows', async (req, res) => {
   try {
-    const { sessionId, reportId, fileName, chunkLines = 1000, subject } = req.body || {};
+    const { sessionId, reportId, fileName, chunkLines = 1000, subject, natsUrl } = req.body || {};
     if (!fileName) return res.status(400).send('Missing fileName');
     const baseDir = reportId ? path.join(REPORT_PATH, reportId) : (sessionId ? path.join(REPORT_PATH, `report-${sessionId}`) : null);
     if (!baseDir) return res.status(400).send('Missing sessionId or reportId');
@@ -722,9 +722,9 @@ router.post('/nats-publish/flows', async (req, res) => {
       filePath = foundPath;
     }
 
-    const nc = await getNatsConnection();
+    const nc = await getNatsConnection(natsUrl);
     const sc = StringCodec();
-    const subj = (process.env.NATS_SUBJECT && process.env.NATS_SUBJECT.trim()) || subject;
+    const subj = subject || (process.env.NATS_SUBJECT && process.env.NATS_SUBJECT.trim());
     if (!subj) {
       await nc.close();
       return res.status(400).send('Missing NATS subject (set NATS_SUBJECT env or pass subject)');
@@ -785,10 +785,10 @@ router.post('/nats-publish/flows', async (req, res) => {
 });
 
 // Stream a model dataset to NATS in chunks to avoid large HTTP payloads
-// Body: { modelId: string, datasetType: 'train'|'test', chunkLines?: number, subject?: string }
+// Body: { modelId: string, datasetType: 'train'|'test', chunkLines?: number, subject?: string, natsUrl?: string }
 router.post('/nats-publish/dataset', async (req, res) => {
   try {
-    const { modelId, datasetType = 'train', chunkLines = 500, subject } = req.body || {};
+    const { modelId, datasetType = 'train', chunkLines = 500, subject, natsUrl } = req.body || {};
     if (!modelId || !datasetType) return res.status(400).send('Missing modelId or datasetType');
 
     const datasetName = `${String(datasetType).charAt(0).toUpperCase() + String(datasetType).slice(1)}_samples.csv`;
@@ -797,9 +797,9 @@ router.post('/nats-publish/dataset', async (req, res) => {
       return res.status(404).send(`Dataset file not found: ${datasetFilePath}`);
     }
 
-    const nc = await getNatsConnection();
+    const nc = await getNatsConnection(natsUrl);
     const sc = StringCodec();
-    const subj = (process.env.NATS_SUBJECT && process.env.NATS_SUBJECT.trim()) || subject;
+    const subj = subject || (process.env.NATS_SUBJECT && process.env.NATS_SUBJECT.trim());
     if (!subj) {
       await nc.close();
       return res.status(400).send('Missing NATS subject (set NATS_SUBJECT env or pass subject)');
@@ -953,13 +953,17 @@ router.post('/rate-limit', async (req, res) => {
 
 router.post('/nats-publish', async (req, res) => {
   try {
-    const { subject, payload } = req.body || {};
+    const { subject, payload, natsUrl } = req.body || {};
     if (!payload) {
       return res.status(400).send('Missing payload');
     }
-    const nc = await getNatsConnection();
+    const nc = await getNatsConnection(natsUrl);
     const sc = StringCodec();
-    const subj = (NATS_SUBJECT && NATS_SUBJECT.trim()) || subject;
+    const subj = subject || (NATS_SUBJECT && NATS_SUBJECT.trim());
+    if (!subj) {
+      await nc.close();
+      return res.status(400).send('Missing NATS subject');
+    }
     const data = typeof payload === 'string' ? payload : JSON.stringify(payload);
     await nc.publish(subj, sc.encode(data));
     await nc.flush();
@@ -974,13 +978,17 @@ router.post('/nats-publish', async (req, res) => {
 // Bulk publish to NATS: accepts an array of payloads and publishes them using a single connection
 router.post('/nats-publish/bulk', async (req, res) => {
   try {
-    const { subject, payloads } = req.body || {};
+    const { subject, payloads, natsUrl } = req.body || {};
     if (!Array.isArray(payloads) || payloads.length === 0) {
       return res.status(400).send('Missing payloads');
     }
-    const nc = await getNatsConnection();
+    const nc = await getNatsConnection(natsUrl);
     const sc = StringCodec();
-    const subj = (NATS_SUBJECT && NATS_SUBJECT.trim()) || subject;
+    const subj = subject || (NATS_SUBJECT && NATS_SUBJECT.trim());
+    if (!subj) {
+      await nc.close();
+      return res.status(400).send('Missing NATS subject');
+    }
     let ok = 0, fail = 0;
     for (const payload of payloads) {
       try {
