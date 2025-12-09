@@ -353,7 +353,7 @@ class FeatureExtractionPage extends Component {
 
     try {
       const config = await showNatsConfigModal();
-      const { natsUrl, subject } = config;
+      const { natsUrl, subject, username, password } = config;
 
       const res = await fetch(`${SERVER_URL}/api/security/nats-publish/flows`, {
         method: 'POST',
@@ -363,7 +363,9 @@ class FeatureExtractionPage extends Component {
           fileName: featuresFileName,
           chunkLines: 1000,
           natsUrl: natsUrl || undefined,
-          subject: subject || undefined
+          subject: subject || undefined,
+          username: username || undefined,
+          password: password || undefined
         }),
       });
       if (!res.ok) throw new Error(await res.text());

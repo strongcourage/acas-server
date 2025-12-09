@@ -88,14 +88,16 @@ export async function handleBulkMitigationAction({ actionKey, rows, isValidIPv4,
     switch (actionKey) {
       case 'send-nats-bulk': {
         try {
-          const { natsUrl, subject } = natsConfig || {};
+          const { natsUrl, subject, username, password } = natsConfig || {};
           const res = await fetch(`${SERVER_URL}/api/security/nats-publish/bulk`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               payloads: list.map((row) => { const copy = { ...row }; delete copy.key; return copy; }),
               natsUrl: natsUrl || undefined,
-              subject: subject || undefined
+              subject: subject || undefined,
+              username: username || undefined,
+              password: password || undefined
             }),
           });
           if (!res.ok) throw new Error(await res.text());
@@ -296,7 +298,9 @@ function NatsConfigModal({ onSubmit, onCancel }) {
         layout="vertical"
         initialValues={{
           natsUrl: '',
-          subject: 'ndr.malicious.flow'
+          subject: '',
+          username: '',
+          password: ''
         }}
       >
         <Form.Item
@@ -311,7 +315,21 @@ function NatsConfigModal({ onSubmit, onCancel }) {
           name="subject"
           rules={[{ required: true, message: 'Please enter NATS subject' }]}
         >
-          <Input placeholder="ndr.malicious.flow" />
+          <Input placeholder="e.g., ndr.flows or network.traffic" />
+        </Form.Item>
+        <Form.Item
+          label="NATS Username (optional)"
+          name="username"
+          help="Leave empty if authentication is not required"
+        >
+          <Input placeholder="Username" />
+        </Form.Item>
+        <Form.Item
+          label="NATS Password (optional)"
+          name="password"
+          help="Leave empty if authentication is not required"
+        >
+          <Input.Password placeholder="Password" />
         </Form.Item>
       </Form>
     </Modal>
@@ -323,9 +341,26 @@ export function showNatsConfigModal() {
   return new Promise((resolve, reject) => {
     const div = document.createElement('div');
     document.body.appendChild(div);
+    const root = require('react-dom/client').createRoot(div);
 
+    let cleaned = false;
     const cleanup = () => {
-      document.body.removeChild(div);
+      if (cleaned) return;
+      cleaned = true;
+
+      try {
+        root.unmount();
+      } catch (e) {
+        console.warn('Failed to unmount root:', e);
+      }
+
+      try {
+        if (div.parentNode === document.body) {
+          document.body.removeChild(div);
+        }
+      } catch (e) {
+        console.warn('Failed to remove div:', e);
+      }
     };
 
     const handleSubmit = (config) => {
@@ -338,14 +373,13 @@ export function showNatsConfigModal() {
       reject(new Error('Cancelled'));
     };
 
-    const root = require('react-dom/client').createRoot(div);
     root.render(
       <NatsConfigModal onSubmit={handleSubmit} onCancel={handleCancel} />
     );
   });
 }
 
-export async function sendToNats({ payload, natsUrl, subject }) {
+export async function sendToNats({ payload, natsUrl, subject, username, password }) {
   try {
     const res = await fetch(`${SERVER_URL}/api/security/nats-publish`, {
       method: 'POST',
@@ -353,7 +387,9 @@ export async function sendToNats({ payload, natsUrl, subject }) {
       body: JSON.stringify({
         payload: (() => { const copy = { ...payload }; delete copy.key; return copy; })(),
         natsUrl,
-        subject
+        subject,
+        username: username || undefined,
+        password: password || undefined
       }),
     });
     if (!res.ok) throw new Error(await res.text());
@@ -536,7 +572,13 @@ export function handleMitigationAction({ actionKey, srcIp, dstIp, sessionId, dpo
     case 'send-nats':
       if (flowRecord) {
         showNatsConfigModal()
-          .then(config => sendToNats({ payload: flowRecord, natsUrl: config.natsUrl, subject: config.subject }))
+          .then(config => sendToNats({
+            payload: flowRecord,
+            natsUrl: config.natsUrl,
+            subject: config.subject,
+            username: config.username,
+            password: config.password
+          }))
           .catch(err => {
             if (err.message !== 'Cancelled') {
               message.error('Failed to get NATS configuration');

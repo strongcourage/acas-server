@@ -999,8 +999,7 @@ class PredictPage extends Component {
       pktsRate,
       byteRate,
       isValidIPv4: this.isValidIPv4,
-      flowRecord: record,
-      natsSubject: 'ndr.malicious.flow'
+      flowRecord: record
     });
   }
 
