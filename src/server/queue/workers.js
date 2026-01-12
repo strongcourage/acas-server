@@ -1037,11 +1037,6 @@ retrainQueue.on('failed', (job, err) => {
   console.error(`[Queue] Retrain job ${job.id} failed:`, err.message);
 });
 
-console.log('[Workers] Started with concurrency:', CONCURRENCY);
-if (!VERBOSE_LOGGING) {
-  console.log('[Workers] Verbose logging disabled for better performance. Set VERBOSE_LOGS=true to enable.');
-}
-
 module.exports = {
   // Workers are automatically started when this module is loaded
 };

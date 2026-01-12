@@ -167,32 +167,32 @@ router.get('/', (req, res) => {
   try {
     const userId = req.userId;
     const userUploadPath = path.join(PCAP_UPLOADS_PATH, userId);
-    
+
     console.log('[PCAP API] GET / - userId:', userId);
     console.log('[PCAP API] GET / - userUploadPath:', userUploadPath);
     console.log('[PCAP API] GET / - path exists:', fs.existsSync(userUploadPath));
-    
+
     // Get sample files
     const sampleFiles = fs.existsSync(PCAP_SAMPLES_PATH)
       ? fs.readdirSync(PCAP_SAMPLES_PATH)
-          .filter(f => PCAP_EXTENSIONS.some(ext => f.endsWith(ext)))
-          .map(f => ({ name: f, type: 'sample', path: 'samples' }))
+        .filter(f => PCAP_EXTENSIONS.some(ext => f.endsWith(ext)))
+        .map(f => ({ name: f, type: 'sample', path: 'samples' }))
       : [];
-    
+
     // Get user's uploaded files
     const userFiles = fs.existsSync(userUploadPath)
       ? fs.readdirSync(userUploadPath)
-          .filter(f => PCAP_EXTENSIONS.some(ext => f.endsWith(ext)))
-          .map(f => ({ name: f, type: 'user', path: `uploads/${userId}` }))
+        .filter(f => PCAP_EXTENSIONS.some(ext => f.endsWith(ext)))
+        .map(f => ({ name: f, type: 'user', path: `uploads/${userId}` }))
       : [];
-    
+
     // IMPORTANT: Put user files FIRST, then samples
     console.log('[PCAP API] GET / - userFiles count:', userFiles.length);
     console.log('[PCAP API] GET / - sampleFiles count:', sampleFiles.length);
     if (userFiles.length > 0) {
       console.log('[PCAP API] GET / - userFiles names:', userFiles.map(f => f.name));
     }
-    
+
     res.send({
       pcaps: [...userFiles, ...sampleFiles],
       samples: sampleFiles.map(f => f.name),
@@ -223,13 +223,19 @@ router.post('/', async (req, res) => {
     const userId = req.userId;
     const isAnonymous = req.isAnonymous;
 
-    // Block anonymous users from uploading
-    if (isAnonymous) {
-      console.warn(`[PCAP] Upload rejected: Anonymous users cannot upload files`);
+    // In production, block anonymous users from uploading
+    // In development/local, allow anonymous uploads for testing
+    const isDevelopment = process.env.NODE_ENV !== 'production';
+    if (isAnonymous && !isDevelopment) {
+      console.warn(`[PCAP] Upload rejected: Anonymous users cannot upload files in production`);
       return res.status(401).json({
         error: 'Authentication required',
         message: 'Please sign in to upload PCAP files',
       });
+    }
+
+    if (isAnonymous && isDevelopment) {
+      console.log(`[PCAP] Allowing anonymous upload in development mode for user: ${userId}`);
     }
 
     // Log upload attempt
@@ -257,7 +263,7 @@ router.post('/', async (req, res) => {
 
     // Sanitize filename to prevent attacks
     const sanitizedName = sanitizeFilename(file.name);
-    
+
     // Create user-specific upload directory
     const userUploadPath = path.join(PCAP_UPLOADS_PATH, userId);
     if (!fs.existsSync(userUploadPath)) {
@@ -278,24 +284,24 @@ router.post('/', async (req, res) => {
       hash = await computeFileHash(tmpPath);
       console.log(`[PCAP] Computed hash for ${sanitizedName}: ${hash.substring(0, 16)}...`);
     } catch (e) {
-      try { fs.unlinkSync(tmpPath); } catch (_) {}
+      try { fs.unlinkSync(tmpPath); } catch (_) { }
       throw e;
     }
 
     const index = readUserIndex(userUploadPath);
     console.log(`[PCAP] Index has ${Object.keys(index).length} entries for user ${userId}`);
-    
+
     if (index && index[hash]) {
       // Duplicate content found in index
       let existingFile = index[hash];
-      
+
       // Validate that the indexed file still exists
       const indexedPath = path.join(userUploadPath, existingFile);
       if (!fs.existsSync(indexedPath)) {
         console.log(`[PCAP] Indexed file ${existingFile} no longer exists, searching for alternative...`);
         existingFile = null;
       }
-      
+
       // Prefer non-suffixed version if it exists (e.g., prefer 'infiltration.pcap' over 'infiltration_2.pcap')
       const baseName = sanitizedName;
       const baseNamePath = path.join(userUploadPath, baseName);
@@ -312,7 +318,7 @@ router.post('/', async (req, res) => {
           // ignore and continue searching
         }
       }
-      
+
       // If indexed file was deleted and no non-suffixed version exists, search directory
       if (!existingFile) {
         console.log(`[PCAP] Searching directory for file with matching hash...`);
@@ -337,9 +343,9 @@ router.post('/', async (req, res) => {
           }
         } catch (_) { /* ignore dir read errors */ }
       }
-      
+
       if (existingFile) {
-        try { fs.unlinkSync(tmpPath); } catch (_) {}
+        try { fs.unlinkSync(tmpPath); } catch (_) { }
         console.log(`[PCAP] ✓ Content-duplicate (index hit) for user ${userId}, reusing: ${existingFile}`);
         return res.status(200).json({
           success: true,
@@ -351,7 +357,7 @@ router.post('/', async (req, res) => {
           dedupBy: 'hash'
         });
       }
-      
+
       // If we reach here, indexed file was deleted and no match found, continue to save as new
       console.log(`[PCAP] Index entry exists but no matching file found, will save as new`);
     }
@@ -364,7 +370,7 @@ router.post('/', async (req, res) => {
         const existingHash = await computeFileHash(sameNamedPath);
         console.log(`[PCAP] Existing file hash: ${existingHash.substring(0, 16)}...`);
         if (existingHash === hash) {
-          try { fs.unlinkSync(tmpPath); } catch (_) {}
+          try { fs.unlinkSync(tmpPath); } catch (_) { }
           index[hash] = sanitizedName;
           writeUserIndex(userUploadPath, index);
           console.log(`[PCAP] ✓ Dedup via legacy same-name match for user ${userId}: ${sanitizedName}`);
@@ -399,7 +405,7 @@ router.post('/', async (req, res) => {
         try {
           const h = await computeFileHash(full);
           if (h === hash) {
-            try { fs.unlinkSync(tmpPath); } catch (_) {}
+            try { fs.unlinkSync(tmpPath); } catch (_) { }
             index[hash] = name;
             writeUserIndex(userUploadPath, index);
             console.log(`[PCAP] ✓ Dedup via directory scan for user ${userId}: ${name}`);
@@ -433,7 +439,7 @@ router.post('/', async (req, res) => {
     try {
       fs.renameSync(tmpPath, filePath);
     } catch (e) {
-      try { fs.unlinkSync(tmpPath); } catch (_) {}
+      try { fs.unlinkSync(tmpPath); } catch (_) { }
       throw e;
     }
 

@@ -36,7 +36,7 @@ export default function FeatureDescriptions({ data = [], modelId, app, title = '
     });
   }, [featuresDescriptions, data]);
 
-  // Enhanced columns with improved styling (matching EarlyPredictionPage format)
+  // Enhanced columns with improved styling
   const enhancedColumns = [
     {
       title: 'ID',

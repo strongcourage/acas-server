@@ -1,4 +1,5 @@
-const BASE_PATH = process.env.DOCKER_ENV ? '/ndr-app/src/server' : __dirname;
+const BASE_PATH = process.env.DOCKER_ENV === 'true' ? '/ndr-app/src/server' : __dirname;
+
 const LOG_PATH = `${BASE_PATH}/logs/`;
 const DEFAULT_LOG_PATH = `${BASE_PATH}/logs/all-logs.log`;
 const MMT_PATH = `${BASE_PATH}/mmt/`;
@@ -11,6 +12,7 @@ const PCAP_EXTENSIONS = ['.pcap', '.pcapng', '.cap'];
 // Deep learning constants paths
 const DEEP_LEARNING_PATH = `${BASE_PATH}/deep-learning/`;
 const MODEL_PATH = `${DEEP_LEARNING_PATH}models/`;
+
 const PREDICTION_PATH = `${DEEP_LEARNING_PATH}predictions/`;
 const TRAINING_PATH = `${DEEP_LEARNING_PATH}trainings/`;
 const XAI_PATH = `${DEEP_LEARNING_PATH}xai/`;

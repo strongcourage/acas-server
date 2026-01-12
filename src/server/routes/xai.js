@@ -17,6 +17,7 @@ const {
   listFiles,
   isFileExist,
 } = require('../utils/file-utils');
+const { handleQueueError } = require('../utils/queueErrorHelper');
 
 const {
   XAI_PATH,
@@ -43,17 +44,21 @@ router.post('/shap/flow', async (req, res) => {
     if (!shapFlowConfig) {
       return res.status(401).send({ error: 'Missing SHAP flow configuration. Please read the docs' });
     }
-    
+
     // Queue-based approach controlled by USE_QUEUE_BY_DEFAULT
     const useQueueDefault = process.env.USE_QUEUE_BY_DEFAULT !== 'false';
     const shouldUseQueue = useQueue !== undefined ? useQueue : useQueueDefault;
-    
+
     if (shouldUseQueue) {
       console.log('[XAI] Using queue-based processing for SHAP flow');
-      const result = await runSHAPForFlowQueued(shapFlowConfig);
-      return res.json(result);
+      try {
+        const result = await runSHAPForFlowQueued(shapFlowConfig);
+        return res.json(result);
+      } catch (error) {
+        return handleQueueError(res, error, 'SHAP flow queue');
+      }
     }
-    
+
     // OLD: Direct processing (blocking)
     runSHAPForFlow(shapFlowConfig, (xaiStatus) => {
       res.send(xaiStatus);
@@ -75,17 +80,21 @@ router.post('/shap', async (req, res) => {
         error: 'Missing SHAP configuration. Please read the docs',
       });
     }
-    
+
     // Queue-based approach controlled by USE_QUEUE_BY_DEFAULT
     const useQueueDefault = process.env.USE_QUEUE_BY_DEFAULT !== 'false';
     const shouldUseQueue = useQueue !== undefined ? useQueue : useQueueDefault;
-    
+
     if (shouldUseQueue) {
       console.log('[XAI] Using queue-based processing for SHAP');
-      const result = await runSHAPQueued(shapConfig);
-      return res.json(result);
+      try {
+        const result = await runSHAPQueued(shapConfig);
+        return res.json(result);
+      } catch (error) {
+        return handleQueueError(res, error, 'SHAP queue');
+      }
     }
-    
+
     // OLD: Direct processing (blocking) - only if useQueue=false
     console.log('[XAI] Using direct processing (blocking) for SHAP');
     runSHAP(shapConfig, (xaiStatus) => {
@@ -121,17 +130,21 @@ router.post('/lime/flow', async (req, res) => {
     if (!limeFlowConfig) {
       return res.status(401).send({ error: 'Missing LIME flow configuration. Please read the docs' });
     }
-    
+
     // Queue-based approach controlled by USE_QUEUE_BY_DEFAULT
     const useQueueDefault = process.env.USE_QUEUE_BY_DEFAULT !== 'false';
     const shouldUseQueue = useQueue !== undefined ? useQueue : useQueueDefault;
-    
+
     if (shouldUseQueue) {
       console.log('[XAI] Using queue-based processing for LIME flow');
-      const result = await runLIMEForFlowQueued(limeFlowConfig);
-      return res.json(result);
+      try {
+        const result = await runLIMEForFlowQueued(limeFlowConfig);
+        return res.json(result);
+      } catch (error) {
+        return handleQueueError(res, error, 'LIME flow queue');
+      }
     }
-    
+
     // OLD: Direct processing (blocking)
     runLIMEForFlow(limeFlowConfig, (xaiStatus) => {
       res.send(xaiStatus);
@@ -153,17 +166,21 @@ router.post('/lime', async (req, res) => {
         error: 'Missing LIME configuration. Please read the docs',
       });
     }
-    
+
     // Queue-based approach controlled by USE_QUEUE_BY_DEFAULT
     const useQueueDefault = process.env.USE_QUEUE_BY_DEFAULT !== 'false';
     const shouldUseQueue = useQueue !== undefined ? useQueue : useQueueDefault;
-    
+
     if (shouldUseQueue) {
       console.log('[XAI] Using queue-based processing for LIME');
-      const result = await runLIMEQueued(limeConfig);
-      return res.json(result);
+      try {
+        const result = await runLIMEQueued(limeConfig);
+        return res.json(result);
+      } catch (error) {
+        return handleQueueError(res, error, 'LIME queue');
+      }
     }
-    
+
     // OLD: Direct processing (blocking) - only if useQueue=false
     console.log('[XAI] Using direct processing (blocking) for LIME');
     runLIME(limeConfig, (xaiStatus) => {
@@ -230,7 +247,7 @@ router.get('/shap/explanations/:modelId/:labelId', (req, res, next) => {
 /**
  * Get LIME explanations of a specific model
  */
- router.get('/lime/explanations/:modelId/:labelId', (req, res, next) => {
+router.get('/lime/explanations/:modelId/:labelId', (req, res, next) => {
   const { modelId, labelId } = req.params;
   let label = null;
 
@@ -265,7 +282,7 @@ router.get('/shap/explanations/:modelId/:labelId', (req, res, next) => {
 /**
  * Get LIME feature importance values of a specific model
  */
- router.get('/lime/importance-values/:modelId/:labelId', (req, res, next) => {
+router.get('/lime/importance-values/:modelId/:labelId', (req, res, next) => {
   const { modelId, labelId } = req.params;
   let label = null;
 

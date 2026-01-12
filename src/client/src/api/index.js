@@ -191,9 +191,9 @@ export const requestUpdateModel = async (modelId, newModelId) => {
   const response = await fetch(url, {
     method: "PUT",
     headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(newId),
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(newId),
   });
   const data = await response.json();
   if (data.error) {
@@ -460,13 +460,13 @@ export const requestRetrainOfflineQueued = async (modelId, trainingDataset, test
   const response = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ 
-      modelId, 
-      trainingDataset, 
-      testingDataset, 
+    body: JSON.stringify({
+      modelId,
+      trainingDataset,
+      testingDataset,
       training_parameters: params,
       isACApp,
-      useQueue: true 
+      useQueue: true
     })
   });
   if (!response.ok) {
@@ -611,15 +611,15 @@ export const requestQueueAttack = async (modelId, selectedAttack, poisoningRate,
       priority: 5, // Default priority
     }),
   });
-  
+
   if (!response.ok) {
     const error = await response.json();
     throw new Error(error.message || 'Failed to queue attack');
   }
-  
+
   const data = await response.json();
   console.log(`Queued attack ${selectedAttack} for model ${modelId}, jobId: ${data.jobId}`);
-  
+
   // Transform response to match expected format
   return {
     jobId: data.jobId,
@@ -631,13 +631,13 @@ export const requestQueueAttack = async (modelId, selectedAttack, poisoningRate,
 export const requestAttackJobStatus = async (jobId) => {
   const url = `${SERVER_URL}/api/queue/status/adversarial-attacks/${jobId}`;
   const response = await fetch(url);
-  
+
   if (!response.ok) {
     throw new Error(`Failed to fetch attack job status for ${jobId}`);
   }
-  
+
   const data = await response.json();
-  
+
   // Transform response to match expected format
   return {
     jobId: data.jobId,
@@ -665,7 +665,7 @@ export const requestPredict = async (modelId, reportId, reportFileName, useQueue
   if (useQueue) {
     return requestPredictOfflineQueued(modelId, reportId, reportFileName);
   }
-  
+
   // OLD: Legacy endpoint for backward compatibility
   const url = `${SERVER_URL}/api/predict`;
 
@@ -762,7 +762,7 @@ export const requestAssistantExplainFlow = async ({ flowRecord, modelId, predict
   const body = { flowRecord, modelId, predictionId, extra };
   const response = await fetch(url, {
     method: 'POST',
-    headers: { 
+    headers: {
       'Content-Type': 'application/json',
       'x-user-id': userId || '',
       'x-is-admin': isAdmin ? 'true' : 'false',
@@ -776,12 +776,11 @@ export const requestAssistantExplainFlow = async ({ flowRecord, modelId, predict
 };
 
 // Rule-based detection (mmt_security)
-export const requestRuleStatus = async ({ ownerToken, sessionId } = {}) => {
+export const requestRuleStatus = async ({ sessionId } = {}) => {
   let url = `${SERVER_URL}/api/security/rule-based/status`;
-  const params = [];
-  if (ownerToken) params.push(`ownerToken=${encodeURIComponent(ownerToken)}`);
-  if (sessionId) params.push(`sessionId=${encodeURIComponent(sessionId)}`);
-  if (params.length > 0) url += `?${params.join('&')}`;
+  if (sessionId) {
+    url += `?sessionId=${encodeURIComponent(sessionId)}`;
+  }
   const res = await fetch(url);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
@@ -830,7 +829,7 @@ export const requestRuleOnlineStart = async ({ iface, intervalSec = 5, verbose =
 
 export const requestRuleOnlineStop = async () => {
   const url = `${SERVER_URL}/api/security/rule-based/online/stop`;
-  const res = await fetch(url, { 
+  const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({})
@@ -891,7 +890,7 @@ export const requestAssistantExplainXAI = async ({ method, modelId, label, expla
   const body = { method, modelId, label, explanation, context };
   const response = await fetch(url, {
     method: 'POST',
-    headers: { 
+    headers: {
       'Content-Type': 'application/json',
       'x-user-id': userId || '',
       'x-is-admin': isAdmin ? 'true' : 'false',
@@ -902,25 +901,6 @@ export const requestAssistantExplainXAI = async ({ method, modelId, label, expla
     const errorText = await response.text();
     throw new Error(errorText || 'Failed to get assistant explanation');
   }
-  return response.json();
-};
-
-// Get token usage stats
-export const requestTokenStats = async (userId, isAdmin) => {
-  const url = `${ASSISTANT_URL}/tokens`;
-  const response = await fetch(url, {
-    headers: {
-      'x-user-id': userId || '',
-      'x-is-admin': isAdmin ? 'true' : 'false',
-    },
-  });
-  return response.json();
-};
-
-// Get assistant provider status (OpenAI or Ollama)
-export const requestAssistantStatus = async () => {
-  const url = `${ASSISTANT_URL}/`;
-  const response = await fetch(url);
   return response.json();
 };
 

@@ -39,7 +39,6 @@ const SERVER_HOST = process.env.SERVER_HOST || '0.0.0.0';
 const SERVER_PORT = (process.env.SERVER_PORT && parseInt(process.env.SERVER_PORT, 10)) || derivedPort || 31057;
 const MODE = process.env.MODE || 'SERVER';
 
-const acRouter = require('./routes/ac');
 const mmtRouter = require('./routes/mmt');
 const pcapRouter = require('./routes/pcap');
 const reportRouter = require('./routes/report');
@@ -57,7 +56,6 @@ const onlineRouter = require('./routes/online');
 const assistantRouter = require('./routes/assistant');
 const featuresRouter = require('./routes/features');
 const queueRouter = require('./routes/queue');
-const earlyPredictionRouter = require('./routes/early-prediction');
 const dpiRouter = require('./routes/dpi');
 const networkRouter = require('./routes/network');
 
@@ -96,12 +94,12 @@ if (API_URL_STR) {
   try {
     const parsed = new URL(API_URL_STR);
     const baseOrigin = `${parsed.protocol}//${parsed.hostname}`;
-    
+
     // Add the base domain with common ports
     allowedOrigins.push(baseOrigin);
     allowedOrigins.push(`http://${parsed.hostname}:3000`);
     allowedOrigins.push(`https://${parsed.hostname}:3000`);
-    
+
     // If there's a port in the URL, add that too
     if (parsed.port) {
       allowedOrigins.push(`${parsed.protocol}//${parsed.hostname}:${parsed.port}`);
@@ -113,8 +111,6 @@ if (API_URL_STR) {
 
 // Remove duplicates
 const uniqueOrigins = [...new Set(allowedOrigins)];
-
-console.log('[CORS] Allowed origins:', uniqueOrigins);
 
 // Configure CORS with allowed origins
 app.use(cors({
@@ -144,12 +140,11 @@ app.use((req, res, next) => {
 
 app.use(expressCspHeader({
   policies: {
-      'default-src': [expressCspHeader.NONE],
-      'img-src': [expressCspHeader.SELF],
+    'default-src': [expressCspHeader.NONE],
+    'img-src': [expressCspHeader.SELF],
   }
 }));
 
-app.use('/api/ac', acRouter);
 app.use('/api/mmt', mmtRouter);
 app.use('/api/pcaps', pcapRouter);
 app.use('/api/reports', reportRouter);
@@ -167,23 +162,11 @@ app.use('/api/online', onlineRouter);
 app.use('/api/assistant', assistantRouter);
 app.use('/api/features', featuresRouter);
 app.use('/api/queue', queueRouter);
-app.use('/api/early-prediction', earlyPredictionRouter);
 app.use('/api/dpi', dpiRouter);
 app.use('/api/network', networkRouter);
 
-// Serve early-prediction artifacts (figures and JSON) as static assets
-// Path: src/server/early-prediction/figures -> /static/early-prediction
-try {
-  const earlyPredFigures = path.join(__dirname, 'early-prediction', 'figures');
-  if (fs.existsSync(earlyPredFigures)) {
-    app.use('/static/early-prediction', express.static(earlyPredFigures));
-    console.log(`[STATIC] Early prediction assets served from ${earlyPredFigures} at /static/early-prediction`);
-  } else {
-    console.warn(`[STATIC] Early prediction figures directory not found: ${earlyPredFigures}`);
-  }
-} catch (e) {
-  console.warn('[STATIC] Failed to set up early prediction static route:', e.message || e);
-}
+// Swagger API documentation - available in all modes at /docs
+app.use('/docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument));
 
 if (MODE === 'SERVER') {
   app.use(express.static(path.join(__dirname, '../public')));
@@ -203,19 +186,13 @@ let server;
 if (PROTOCOL === 'HTTP') {
   server = app.listen(SERVER_PORT, SERVER_HOST, () => {
     console.log(`[HTTP SERVER] NDR server started on http://${SERVER_HOST}:${SERVER_PORT}`);
-    
+
     // Start periodic cleanup of all sessions (every 15 minutes)
     const sessionManager = require('./utils/sessionManager');
-    
+
     setInterval(() => {
-      console.log('[SessionManager] Running periodic cleanup for all session types...');
-      const cleaned = sessionManager.cleanupOldSessions();
-      if (cleaned === 0) {
-        console.log('[SessionManager] No old sessions to clean up');
-      }
+      sessionManager.cleanupOldSessions();
     }, 15 * 60 * 1000); // 15 minutes
-    
-    console.log('[SessionManager] Periodic cleanup scheduled (every 15 minutes) for all session types (DPI, Prediction, XAI, Attacks)');
   });
 }
 

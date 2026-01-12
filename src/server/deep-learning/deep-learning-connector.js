@@ -415,12 +415,12 @@ const startPredicting = async (predictConfig, callback) => {
             } else {
               // Create session in session manager
               const session = sessionManager.createSession('prediction', predictionId, 'offline', { config: predictConfig });
-              
+
               spawnCommand(PYTHON_CMD, [`${DEEP_LEARNING_PATH}/prediction.py`, csvPath, modelPath, predictionPath], logFile, () => {
                 // Mark session as completed
                 sessionManager.completeSession('prediction', predictionId);
               });
-              
+
               // Return session data in legacy format
               callback({
                 isRunning: session.isRunning,
@@ -445,10 +445,10 @@ const startPredicting = async (predictConfig, callback) => {
               // MMT has been started, start processing the report
               // Create session in session manager
               const session = sessionManager.createSession('prediction', predictionId, 'online', { config: predictConfig });
-              
+
               const { sessionId } = mmtStatus;
               const csvRootPath = `${REPORT_PATH}/report-${sessionId}`;
-              
+
               // Return session data in legacy format
               callback({
                 isRunning: session.isRunning,
@@ -456,7 +456,7 @@ const startPredicting = async (predictConfig, callback) => {
                 lastPredictedId: session.sessionId,
                 config: session.config
               });
-              
+
               startOnlinePrediction(csvRootPath, modelPath, predictionPath, logFile, 0);
             }
           });

@@ -107,11 +107,6 @@ const LandingPage = () => {
       description: 'SHAP and LIME explanations provide comprehensive root cause analysis and feature importance for every detection.'
     },
     {
-      icon: <ThunderboltOutlined style={{ fontSize: 40, color: '#faad14' }} />,
-      title: 'Early Prediction',
-      description: 'LSTM-based deep learning models predict attacks 1-20 minutes in advance with continuous risk scoring and confidence levels.'
-    },
-    {
       icon: <InteractionOutlined style={{ fontSize: 40, color: '#13c2c2' }} />,
       title: 'Automated Response with SOAR',
       description: 'Integrate with SOAR platforms for automated incident response, threat mitigation, and orchestrated security workflows.'

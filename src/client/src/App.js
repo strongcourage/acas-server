@@ -29,7 +29,6 @@ import AccountabilityMetricsPage from "./pages/AccountabilityMetricsPage";
 import ResilienceMetricsPage from "./pages/ResilienceMetricsPage";
 import LandingPage from "./pages/LandingPage";
 import FeatureExtractionPage from "./pages/FeatureExtractionPage";
-import EarlyPredictionPage from "./pages/EarlyPredictionPage";
 import DPIPage from "./pages/DPIPage";
 import NetworkPage from "./pages/NetworkPage";
 import SignInPage from "./pages/SignInPage";
@@ -132,12 +131,6 @@ function App() {
             <Route path="/predict/offline/:modelId" element={<PredictPage />} />
             <Route path="/predict/rule-based" element={<PredictRuleBasedPage />} />
             <Route path="/predict/:modelId" element={<PredictPage />} />
-            
-            {/* Early Prediction route - accessible to all (page has frozen overlay for non-admins) */}
-            <Route 
-              path="/predict/early" 
-              element={<EarlyPredictionPage />} 
-            />
                 </Routes>
               </Layout.Content>
               <MAIPFooter />

@@ -6,6 +6,7 @@ const {
 } = require('../deep-learning/deep-learning-connector');
 const { listNetworkInterfaces } = require('../utils/utils');
 const { queuePrediction, getJobStatus } = require('../queue/job-queue');
+const { handleQueueError } = require('../utils/queueErrorHelper');
 const { v4: uuidv4 } = require('uuid');
 
 const router = express.Router();
@@ -95,33 +96,38 @@ router.get('/interfaces', (req, res) => {
 router.post('/offline', async (req, res) => {
   try {
     const { modelId, reportId, reportFileName, useQueue } = req.body || {};
-    
+
     if (!modelId || !reportId || !reportFileName) {
-      return res.status(400).json({ 
+      return res.status(400).json({
         error: 'Missing required parameters',
         message: 'modelId, reportId, and reportFileName are required'
       });
     }
-    
+
     // Queue-based approach is ENABLED BY DEFAULT
     const useQueueDefault = process.env.USE_QUEUE_BY_DEFAULT !== 'false';
     const shouldUseQueue = useQueue !== undefined ? useQueue : useQueueDefault;
-    
+
     if (shouldUseQueue) {
       console.log('[Prediction] Using queue-based processing for model:', modelId);
-      
+
       // Generate unique prediction ID
       const predictionId = `predict-${Date.now()}-${uuidv4().substring(0, 8)}`;
-      
-      // Queue the prediction job
-      const jobInfo = await queuePrediction({
-        modelId,
-        reportId,
-        reportFileName,
-        predictionId,
-        priority: 5
-      });
-      
+
+      let jobInfo;
+      try {
+        // Queue the prediction job
+        jobInfo = await queuePrediction({
+          modelId,
+          reportId,
+          reportFileName,
+          predictionId,
+          priority: 5
+        });
+      } catch (error) {
+        return handleQueueError(res, error, 'Prediction queue');
+      }
+
       return res.json({
         success: true,
         useQueue: true,
@@ -133,10 +139,10 @@ router.post('/offline', async (req, res) => {
         message: 'Prediction job queued successfully'
       });
     }
-    
+
     // OLD: Direct processing (blocking) - only if useQueue=false
     console.log('[Prediction] Using direct processing (blocking) for model:', modelId);
-    
+
     // Use existing direct prediction method (legacy)
     const predictConfig = {
       modelId,
@@ -145,7 +151,7 @@ router.post('/offline', async (req, res) => {
         value: { reportId, reportFileName }
       }
     };
-    
+
     startPredicting(predictConfig, (predictingStatus) => {
       if (predictingStatus.error) {
         return res.status(500).json({
@@ -153,7 +159,7 @@ router.post('/offline', async (req, res) => {
           error: predictingStatus.error
         });
       }
-      
+
       res.json({
         success: true,
         useQueue: false,
@@ -162,7 +168,7 @@ router.post('/offline', async (req, res) => {
         message: 'Prediction started (blocking mode)'
       });
     });
-    
+
   } catch (error) {
     console.error('[Prediction] Error:', error);
     res.status(500).json({

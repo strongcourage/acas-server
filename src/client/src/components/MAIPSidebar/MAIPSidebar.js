@@ -99,18 +99,6 @@ class MAIPSidebar extends Component {
             label: 'Anomaly Prediction',
             link: '/predict',
           },
-          {
-            key: MENU_OPTIONS[19].key,
-            label: (
-              <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
-                <span>Early Prediction</span>
-                {isLoaded && !isAdmin && <LockOutlined style={{ fontSize: '12px', color: '#ff4d4f', marginLeft: '8px' }} />}
-              </span>
-            ),
-            link: MENU_OPTIONS[19].link,
-            protected: false,
-            requireAuth: false,
-          },
         ],
       },
       {
