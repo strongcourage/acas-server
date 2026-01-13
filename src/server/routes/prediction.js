@@ -71,9 +71,48 @@ router.get('/:predictionId/normal', (req, res, next) => {
  */
 router.get('/:predictionId', (req, res, next) => {
   const { predictionId } = req.params;
+  const sessionManager = require('../utils/sessionManager');
+
+  // Check if prediction is still running
+  const session = sessionManager.getSession('prediction', predictionId);
+
+  if (session && session.isRunning) {
+    return res.status(202).json({
+      status: 'processing',
+      message: 'Prediction is still in progress',
+      predictionId: predictionId,
+      startedAt: session.createdAt
+    });
+  }
+
   readTextFile(`${PREDICTION_PATH}${predictionId}/stats.csv`, (err, prediction) => {
     if (err) {
-      res.status(401).send({ error: 'Something went wrong!' });
+      // Check if the prediction directory exists
+      const fs = require('fs');
+      const path = require('path');
+      const predictionDir = path.join(PREDICTION_PATH, predictionId);
+
+      if (!fs.existsSync(predictionDir)) {
+        return res.status(404).json({
+          error: 'Prediction not found',
+          message: `No prediction found with ID: ${predictionId}`
+        });
+      }
+
+      // Directory exists but stats.csv doesn't - likely still processing or failed
+      if (session && !session.isRunning) {
+        return res.status(500).json({
+          error: 'Prediction failed',
+          message: 'The prediction process completed but did not generate results. Check the prediction logs.',
+          predictionId: predictionId
+        });
+      }
+
+      return res.status(404).json({
+        error: 'Results not available',
+        message: 'Prediction results file (stats.csv) not found. The prediction may still be processing or may have failed.',
+        predictionId: predictionId
+      });
     } else {
       res.send({ prediction });
     }

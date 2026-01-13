@@ -136,7 +136,7 @@
                 "properties" : {
                   "fileName" : {
                     "type" : "string",
-                    "example" : "tcp_bbc-out-of-order.pcap"
+                    "example" : "infiltration.pcap"
                   }
                 }
               }
@@ -1528,15 +1528,15 @@
                 "properties" : {
                   "modelId" : {
                     "type" : "string",
-                    "example" : "6d9aebed-aa34-47c5-be80-b41280c32163.h5"
+                    "example" : "model_2"
                   },
                   "reportId" : {
                     "type" : "string",
-                    "example" : "report-honeypot.pcap-342727c9"
+                    "example" : "report-infiltration.pcap-0676753b-59ad-48d2-a491-ded2eeb80473"
                   },
                   "reportFileName" : {
                     "type" : "string",
-                    "example" : "1675893004.993760_0_honeypot.pcap.csv"
+                    "example" : "1768309962.560843_0_infiltration.pcap.csv"
                   },
                   "useQueue" : {
                     "type" : "boolean",
@@ -2633,19 +2633,43 @@
       "post" : {
         "tags" : [ "online" ],
         "summary" : "Start online packet capture",
-        "description" : "Start capturing packets with tcpdump",
+        "description" : "Start capturing packets with tcpdump. Uses BPF (Berkeley Packet Filter) syntax for filtering.",
         "operationId" : "startOnlineCapture",
         "requestBody" : {
           "content" : {
             "application/json" : {
               "schema" : {
                 "type" : "object",
+                "required" : ["iface"],
                 "properties" : {
-                  "iface" : {"type" : "string"},
-                  "windowSec" : {"type" : "number"},
-                  "totalDurationSec" : {"type" : "number"},
-                  "filter" : {"type" : "string"}
+                  "iface" : {
+                    "type" : "string",
+                    "description" : "Network interface to capture on (e.g., eth0, enp0s3)",
+                    "example" : "eth0"
+                  },
+                  "windowSec" : {
+                    "type" : "number",
+                    "description" : "Time window in seconds for rotating PCAP files",
+                    "default" : 10,
+                    "example" : 10
+                  },
+                  "totalDurationSec" : {
+                    "type" : "number",
+                    "description" : "Total capture duration in seconds (null for unlimited)",
+                    "example" : 60
+                  },
+                  "filter" : {
+                    "type" : "string",
+                    "description" : "BPF (Berkeley Packet Filter) expression to filter captured traffic. Examples: 'tcp port 80' (HTTP only), 'host 192.168.1.1' (specific host), 'tcp port 443 or tcp port 80' (HTTP/HTTPS), 'not port 22' (exclude SSH). Leave empty or omit to capture all traffic.",
+                    "example" : "tcp port 80 or tcp port 443"
+                  }
                 }
+              },
+              "example" : {
+                "iface" : "eth0",
+                "windowSec" : 10,
+                "totalDurationSec" : 60,
+                "filter" : "tcp port 80 or tcp port 443"
               }
             }
           }

@@ -1,4 +1,5 @@
 /* eslint-disable no-plusplus */
+const fs = require('fs');
 const {
   REPORT_PATH,
   LOG_PATH,
@@ -25,7 +26,6 @@ const {
   spawnCommandAsync,
 } = require('../utils/utils');
 
-const fs = require('fs');
 const path = require('path');
 const sessionManager = require('../utils/sessionManager');
 
@@ -290,6 +290,61 @@ const stopOnlinePrediction = (callback) => {
 };
 
 /**
+ * Execute prediction on a single CSV file (common logic for both online and offline)
+ * @param {String} csvPath - Full path to the CSV file
+ * @param {String} modelPath - Path to the model
+ * @param {String} predictionPath - Output directory for predictions
+ * @param {String} logPath - Log file path
+ * @param {Function} onComplete - Callback when prediction completes (exitCode)
+ * @returns {Boolean} - True if prediction started, false if skipped
+ */
+const executePrediction = (csvPath, modelPath, predictionPath, logPath, onComplete) => {
+  try {
+    // Check if CSV has actual flow data
+    const stats = fs.statSync(csvPath);
+    const fileSizeKB = stats.size / 1024;
+    const fileContent = fs.readFileSync(csvPath, 'utf8');
+    const lines = fileContent.trim().split('\n');
+    const dataLines = lines.filter(line => line.trim().length > 0 && !line.startsWith('#'));
+    
+    // Skip if no flow data (< 3 lines = header/metadata only)
+    if (dataLines.length < 3) {
+      const fileName = path.basename(csvPath);
+      console.log(`⏭️  Skipping CSV with no flow data (${dataLines.length} lines, ${fileSizeKB.toFixed(2)} KB): ${fileName}`);
+      if (onComplete) onComplete(0); // Call completion with success code
+      return false;
+    }
+    
+    const fileName = path.basename(csvPath);
+    console.log(`🔍 Running prediction: ${fileName} (${dataLines.length} flows, ${fileSizeKB.toFixed(2)} KB)`);
+    
+    spawnCommand(
+      PYTHON_CMD,
+      [`${DEEP_LEARNING_PATH}/prediction.py`, csvPath, modelPath, predictionPath],
+      logPath,
+      (error) => {
+        // spawnCommand passes Error object on failure, null on success
+        if (!error) {
+          console.log(`✅ Prediction completed: ${fileName}`);
+          if (onComplete) onComplete(0);
+        } else {
+          console.error(`❌ Prediction failed: ${fileName}`);
+          console.error(`   Error: ${error.message}`);
+          console.error(`   Log: ${logPath}`);
+          if (onComplete) onComplete(1);
+        }
+      },
+      { suppressOutput: true }
+    );
+    return true;
+  } catch (error) {
+    console.error(`Error executing prediction: ${error.message}`);
+    if (onComplete) onComplete(1); // Call with error code
+    return false;
+  }
+};
+
+/**
  * Start online prediction process
  * - Read the list of completed report file (which has both .csv and .sem files)
  * - Execute the prediction process for the one that has not been processed (not in the list of processedReports)
@@ -300,38 +355,67 @@ const stopOnlinePrediction = (callback) => {
  * @param {String} logPath Path to the log of what's going on with the prediction process
  * @param {Number} currentIndex The index of the report is going to be processed
  */
-const startOnlinePrediction = (reportPath, modelPath, predictionPath, logPath, currentIndex) => {
+const startOnlinePrediction = (reportPath, modelPath, predictionPath, logPath, currentIndex, waitCount = 0) => {
   if (!predictingStatus.isRunning) {
     console.log('The online prediction process has been terminated');
     return;
   }
-  console.log(`startOnlinePrediction: ${currentIndex}`);
+  
+  // First call for this index
+  if (waitCount === 0) {
+    console.log(`startOnlinePrediction: ${currentIndex}`);
+  }
+  
   let allCSVFiles = listFilesByTypeAsync(reportPath, '.csv');
-  let allSEMFiles = listFilesByTypeAsync(reportPath, '.sem');
   let currentReport = allCSVFiles[currentIndex];
-  while (!currentReport && predictingStatus.isRunning) {
-    // waiting for the report to be generated
-    console.log(`Waiting for ${currentIndex}`);
-    // Should put some sleep?
-    allCSVFiles = listFilesAsync(reportPath, 'csv');
-    currentReport = allCSVFiles[currentIndex];
+  
+  // If CSV file doesn't exist yet, wait and retry
+  if (!currentReport) {
+    waitCount++;
+    // Use setTimeout to avoid blocking the event loop (no logging during wait)
+    setTimeout(() => {
+      startOnlinePrediction(reportPath, modelPath, predictionPath, logPath, currentIndex, waitCount);
+    }, 1000);
+    return;
   }
 
-  console.log(`Got the report: ${currentReport}`);
-  // The report exist
-  const currentSemFile = `${currentReport}.sem`;
-  console.log(`Sem files: ${allSEMFiles.length}`);
-  while (allSEMFiles.indexOf(currentSemFile) === -1 && predictingStatus.isRunning) {
-    // wait until there is a .sem file - which means the report has been completed
-    console.log(`Waiting for ${currentSemFile}`);
-    // Should put some sleep?
-    allSEMFiles = listFilesAsync(reportPath, 'sem');
-    console.log(`Sem files: ${allSEMFiles.length}`);
+  // CSV exists, now check for .sem file
+  checkForSemFile(reportPath, modelPath, predictionPath, logPath, currentIndex, currentReport, 0);
+};
+
+const checkForSemFile = (reportPath, modelPath, predictionPath, logPath, currentIndex, currentReport, semWaitCount) => {
+  if (!predictingStatus.isRunning) {
+    console.log('The online prediction process has been terminated');
+    return;
   }
-  // We have the .sem file, going to process the report
-  console.log(`Got the sem file: ${currentSemFile}`);
+  
+  const allSEMFiles = listFilesByTypeAsync(reportPath, '.sem');
+  const currentSemFile = `${currentReport}.sem`;
+  
+  // If .sem file doesn't exist yet, wait and retry
+  if (allSEMFiles.indexOf(currentSemFile) === -1) {
+    semWaitCount++;
+    
+    // Timeout after 120 attempts (60 seconds) - skip this CSV and move to next
+    if (semWaitCount >= 120) {
+      console.log(`⚠️  Timeout waiting for .sem file: ${currentSemFile} - skipping`);
+      // Skip this report and move to next
+      startOnlinePrediction(reportPath, modelPath, predictionPath, logPath, currentIndex + 1);
+      return;
+    }
+    
+    // Use setTimeout to avoid blocking the event loop (no logging during wait)
+    setTimeout(() => {
+      checkForSemFile(reportPath, modelPath, predictionPath, logPath, currentIndex, currentReport, semWaitCount);
+    }, 500);
+    return;
+  }
+  
+  // Both CSV and .sem exist, execute prediction using common function
   const csvPath = `${reportPath}/${currentReport}`;
-  spawnCommand(PYTHON_CMD, [`${DEEP_LEARNING_PATH}/prediction.py`, csvPath, modelPath, `${predictionPath}/${currentReport}/`], logPath, () => {
+  
+  executePrediction(csvPath, modelPath, predictionPath, logPath, (exitCode) => {
+    // Process next report regardless of success/failure/skip
     startOnlinePrediction(reportPath, modelPath, predictionPath, logPath, currentIndex + 1);
   });
 };
@@ -410,13 +494,16 @@ const startPredicting = async (predictConfig, callback) => {
           isFileExist(csvPath, async (report) => {
             if (!report) {
               callback({
-                error: `The input traffic ${JSON.stringify(value)} doest not exist`,
+                error: `The report file does not exist: ${value.reportFileName}`,
+                details: `Report ID: ${value.reportId}. You must first run feature extraction (POST /features/extract) to generate a report before running prediction.`,
+                missingFile: csvPath
               });
             } else {
               // Create session in session manager
               const session = sessionManager.createSession('prediction', predictionId, 'offline', { config: predictConfig });
 
-              spawnCommand(PYTHON_CMD, [`${DEEP_LEARNING_PATH}/prediction.py`, csvPath, modelPath, predictionPath], logFile, () => {
+              // Use common prediction execution function
+              executePrediction(csvPath, modelPath, predictionPath, logFile, (exitCode) => {
                 // Mark session as completed
                 sessionManager.completeSession('prediction', predictionId);
               });
@@ -434,7 +521,8 @@ const startPredicting = async (predictConfig, callback) => {
         case 'online':
           // Start MMTOnline
           // eslint-disable-next-line no-case-declarations
-          startMMTOnline(value, (mmtStatus) => {
+          const netInf = value.netInf || value;
+          startMMTOnline(netInf, (mmtStatus) => {
             console.log('MMTStatus:');
             // isRunning: true,
             // sessionId,
@@ -448,6 +536,12 @@ const startPredicting = async (predictConfig, callback) => {
 
               const { sessionId } = mmtStatus;
               const csvRootPath = `${REPORT_PATH}/report-${sessionId}`;
+
+              // Set global predictingStatus for backward compatibility with startOnlinePrediction loop
+              predictingStatus.isRunning = true;
+              predictingStatus.lastPredictedAt = session.createdAt;
+              predictingStatus.lastPredictedId = session.sessionId;
+              predictingStatus.config = session.config;
 
               // Return session data in legacy format
               callback({

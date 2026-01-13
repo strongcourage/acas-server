@@ -212,4 +212,130 @@ router.get('/job/:jobId', async (req, res) => {
   }
 });
 
+/**
+ * POST /api/predict/online
+ * Start online prediction - combines MMT-probe monitoring with AI prediction
+ * Body: { modelId: string, interface: string }
+ * 
+ * This endpoint:
+ * 1. Starts MMT-probe on the specified network interface
+ * 2. Automatically runs AI prediction on generated CSV reports
+ * 3. Returns prediction results in real-time
+ * 
+ * No need to manually run tcpdump or orchestrate multiple API calls
+ */
+router.post('/online', async (req, res) => {
+  try {
+    const { modelId, interface: netInf } = req.body || {};
+
+    if (!modelId) {
+      return res.status(400).json({
+        error: 'Missing required parameter: modelId',
+        message: 'Please provide a trained model ID'
+      });
+    }
+
+    if (!netInf) {
+      return res.status(400).json({
+        error: 'Missing required parameter: interface',
+        message: 'Please provide a network interface name (e.g., eth0, lo)'
+      });
+    }
+
+    // Use the existing startPredicting with type='online'
+    const predictConfig = {
+      modelId,
+      inputTraffic: {
+        type: 'online',
+        value: {
+          netInf
+        }
+      }
+    };
+
+    startPredicting(predictConfig, (predictingStatus) => {
+      if (predictingStatus.error) {
+        return res.status(500).json({
+          success: false,
+          error: predictingStatus.error,
+          message: 'Failed to start online prediction'
+        });
+      }
+
+      res.json({
+        success: true,
+        mode: 'online',
+        interface: netInf,
+        modelId,
+        predictionId: predictingStatus.lastPredictedId,
+        sessionId: predictingStatus.config?.inputTraffic?.value?.sessionId,
+        isRunning: predictingStatus.isRunning,
+        startedAt: predictingStatus.lastPredictedAt,
+        message: `Online prediction started on interface ${netInf} using model ${modelId}`
+      });
+    });
+
+  } catch (error) {
+    console.error('[Online Prediction] Error:', error);
+    res.status(500).json({
+      error: 'Internal server error',
+      message: error.message
+    });
+  }
+});
+
+/**
+ * GET /api/predict/online/status
+ * Get status of online prediction
+ */
+router.get('/online/status', (req, res) => {
+  try {
+    const status = getPredictingStatus();
+    
+    // Check if it's actually an online prediction
+    const isOnlineMode = status.config?.inputTraffic?.type === 'online';
+    
+    res.json({
+      success: true,
+      mode: isOnlineMode ? 'online' : 'offline',
+      isRunning: status.isRunning,
+      predictionId: status.lastPredictedId,
+      interface: isOnlineMode ? status.config?.inputTraffic?.value?.netInf : null,
+      modelId: isOnlineMode ? status.config?.modelId : null,
+      startedAt: status.lastPredictedAt,
+      config: status.config
+    });
+  } catch (error) {
+    console.error('[Online Prediction Status] Error:', error);
+    res.status(500).json({
+      error: 'Failed to get online prediction status',
+      message: error.message
+    });
+  }
+});
+
+/**
+ * POST /api/predict/online/stop
+ * Stop online prediction
+ */
+router.post('/online/stop', (req, res) => {
+  try {
+    stopOnlinePrediction((predictingStatus) => {
+      res.json({
+        success: true,
+        message: 'Online prediction stopped',
+        isRunning: predictingStatus.isRunning,
+        predictionId: predictingStatus.lastPredictedId,
+        stoppedAt: Date.now()
+      });
+    });
+  } catch (error) {
+    console.error('[Online Prediction Stop] Error:', error);
+    res.status(500).json({
+      error: 'Failed to stop online prediction',
+      message: error.message
+    });
+  }
+});
+
 module.exports = router;

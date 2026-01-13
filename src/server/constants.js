@@ -18,7 +18,7 @@ const TRAINING_PATH = `${DEEP_LEARNING_PATH}trainings/`;
 const XAI_PATH = `${DEEP_LEARNING_PATH}xai/`;
 const ATTACKS_PATH = `${DEEP_LEARNING_PATH}attacks/`;
 const DATASETS_PATH = `${DEEP_LEARNING_PATH}datasets/`;
-const PYTHON_CMD = `python3`;
+const PYTHON_CMD = process.env.PYTHON_CMD || 'python3';
 
 const AC_PATH = `${BASE_PATH}/activity-classification/`;
 const AC_TRAINING_PATH = `${AC_PATH}trainings/`;
