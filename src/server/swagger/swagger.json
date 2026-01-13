@@ -924,7 +924,8 @@
                     "$ref" : "#/components/schemas/trainingParameters"
                   },
                   "useQueue" : {
-                    "type" : "boolean"
+                    "type" : "boolean",
+                    "example" : false
                   }
                 }
               }
@@ -1539,7 +1540,7 @@
                   },
                   "useQueue" : {
                     "type" : "boolean",
-                    "example" : true
+                    "example" : false
                   }
                 }
               }
@@ -2034,7 +2035,8 @@
                     "type" : "object"
                   },
                   "useQueue" : {
-                    "type" : "boolean"
+                    "type" : "boolean",
+                    "example" : false
                   }
                 }
               }
@@ -2068,7 +2070,8 @@
                     "type" : "object"
                   },
                   "useQueue" : {
-                    "type" : "boolean"
+                    "type" : "boolean",
+                    "example" : false
                   }
                 }
               }
@@ -2548,11 +2551,18 @@
                 "properties" : {
                   "pcapFile" : {"type" : "string"},
                   "filePath" : {"type" : "string"},
-                  "useQueue" : {"type" : "boolean"},
+                  "useQueue" : {"type" : "boolean", "example" : false},
                   "verbose" : {"type" : "boolean"},
                   "excludeRules" : {"type" : "array", "items" : {"type" : "string"}},
                   "cores" : {"type" : "number"}
                 }
+              },
+              "example" : {
+                "pcapFile" : "test_p90_replay.pcapng",
+                "useQueue" : false,
+                "verbose" : true,
+                "excludeRules" : [""],
+                "cores" : 1
               }
             }
           }
@@ -2775,7 +2785,7 @@
                 "properties" : {
                   "pcapFile" : {"type" : "string"},
                   "isMalicious" : {"type" : "boolean"},
-                  "useQueue" : {"type" : "boolean"}
+                  "useQueue" : {"type" : "boolean", "example" : false}
                 }
               }
             }
@@ -2925,7 +2935,7 @@
                 "type" : "object",
                 "properties" : {
                   "pcapFile" : {"type" : "string"},
-                  "useQueue" : {"type" : "boolean"}
+                  "useQueue" : {"type" : "boolean", "example" : false}
                 }
               }
             }

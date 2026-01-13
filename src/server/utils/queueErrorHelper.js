@@ -7,13 +7,15 @@ function handleQueueError(res, error, operation = 'Background job processing') {
 
   const isRedisError = error.message.includes('Redis') ||
     error.message.includes('ECONNREFUSED') ||
-    error.message.includes('Connection refused');
+    error.message.includes('Connection refused') ||
+    error.message.includes('Stream isn\'t writeable') ||
+    error.message.includes('enableOfflineQueue');
 
   if (isRedisError) {
     return res.status(503).json({
       error: 'Queue service (Redis) unavailable',
       message: `${operation} is currently unavailable because the Redis/Valkey service is not running.`,
-      suggestion: 'Please ensure Redis/Valkey is running on your system, or update your request body to use "useQueue": false for direct processing.',
+      suggestion: 'Please ensure Redis/Valkey is running on your system, or set "useQueue": false in your request body for direct (non-queued) processing.',
       details: error.message
     });
   }
