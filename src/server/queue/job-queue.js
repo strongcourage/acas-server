@@ -3,19 +3,43 @@
  *
  * Handles 30+ concurrent users by queuing resource-intensive tasks
  * Minimal changes to existing code - just wrap existing functions
+ * 
+ * IMPORTANT: Redis/Valkey is REQUIRED for queue functionality
+ * - Client assumes Redis is always available
+ * - Server will automatically fallback to sync mode if Redis is unavailable
+ * - Install Redis: sudo apt-get install redis-server
+ * - Configure: Set REDIS_URL in .env (default: redis://localhost:6379/2)
  */
 
 const Queue = require('bull');
 const path = require('path');
 
 // Redis connection (default: localhost:6379)
+// REQUIRED: Redis must be running for queue-based processing
 const REDIS_URL = process.env.REDIS_URL || 'redis://127.0.0.1:6379';
 
-// Redis connection options to fail fast if Redis is down
+// Redis connection options with retry logic
 const redisOptions = {
-  enableOfflineQueue: false, // Don't buffer commands if Redis is down
-  connectTimeout: 5000,      // Timeout after 5 seconds
-  maxRetriesPerRequest: 0,   // Fail immediately on disconnected client
+  enableOfflineQueue: true,  // Allow buffering during initial connection
+  connectTimeout: 10000,     // Timeout after 10 seconds
+  maxRetriesPerRequest: 3,   // Retry up to 3 times
+  retryStrategy: (times) => {
+    if (times > 10) {
+      console.error('[Redis] Max connection retries reached');
+      return null; // Stop retrying after 10 attempts
+    }
+    const delay = Math.min(times * 500, 2000);
+    console.log(`[Redis] Retry attempt ${times}, waiting ${delay}ms`);
+    return delay;
+  },
+  reconnectOnError: (err) => {
+    const targetErrors = ['READONLY', 'ECONNRESET', 'ETIMEDOUT'];
+    if (targetErrors.some(e => err.message.includes(e))) {
+      console.log('[Redis] Reconnecting due to:', err.message);
+      return true; // Reconnect on specific errors
+    }
+    return false;
+  }
 };
 
 // Create shared queue options
@@ -110,6 +134,20 @@ const retrainQueue = new Queue('model-retraining', REDIS_URL, {
     maxStalledCount: 2
   }
 });
+
+// Add error handlers to prevent crashes
+const queues = [featureQueue, trainingQueue, predictionQueue, ruleBasedQueue, xaiQueue, attackQueue, retrainQueue];
+queues.forEach(queue => {
+  queue.on('error', (error) => {
+    console.error(`[Queue ${queue.name}] Error:`, error.message);
+  });
+  
+  queue.on('failed', (job, err) => {
+    console.error(`[Queue ${queue.name}] Job ${job.id} failed:`, err.message);
+  });
+});
+
+console.log('[Queue] All queues initialized with error handlers');
 
 // Configure concurrency (number of parallel workers)
 const CONCURRENCY = {

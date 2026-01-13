@@ -5,7 +5,25 @@
  * Just import existing functions and call them from workers
  */
 
-const { featureQueue, trainingQueue, predictionQueue, ruleBasedQueue, xaiQueue, attackQueue, retrainQueue } = require('./job-queue');
+let featureQueue, trainingQueue, predictionQueue, ruleBasedQueue, xaiQueue, attackQueue, retrainQueue;
+
+try {
+  const queues = require('./job-queue');
+  featureQueue = queues.featureQueue;
+  trainingQueue = queues.trainingQueue;
+  predictionQueue = queues.predictionQueue;
+  ruleBasedQueue = queues.ruleBasedQueue;
+  xaiQueue = queues.xaiQueue;
+  attackQueue = queues.attackQueue;
+  retrainQueue = queues.retrainQueue;
+  console.log('[Workers] Queue workers initialized successfully');
+} catch (error) {
+  console.error('[Workers] Failed to initialize queue workers:', error.message);
+  console.error('[Workers] Queue-based processing will not be available. Server will use sync mode.');
+  // Export empty module to prevent crashes
+  module.exports = {};
+  return;
+}
 const path = require('path');
 const fs = require('fs');
 

@@ -23,7 +23,7 @@ const SECURITY_OUT_DIR = path.join(__dirname, '../mmt/outputs');
 const sessionManager = require('../utils/sessionManager');
 // Import queue functions
 const { queueRuleBasedDetection, getJobStatus } = require('../queue/job-queue');
-const { handleQueueError } = require('../utils/queueErrorHelper');
+const { handleQueueError, isRedisError } = require('../utils/queueErrorHelper');
 
 // Default to sudo unless explicitly disabled; use non-interactive to avoid blocking
 const SUDO = USE_SUDO === 'false' ? '' : 'sudo -n ';
@@ -498,6 +498,7 @@ router.post('/rule-based/offline', async (req, res) => {
     // Queue-based approach is ENABLED BY DEFAULT
     const useQueueDefault = process.env.USE_QUEUE_BY_DEFAULT !== 'false';
     const shouldUseQueue = useQueue !== undefined ? useQueue : useQueueDefault;
+    let fallbackToSync = false;
 
     if (shouldUseQueue) {
       console.log('[SECURITY][rule-based][offline] Using queue-based processing for session:', sessionId);
@@ -515,10 +516,19 @@ router.post('/rule-based/offline', async (req, res) => {
           priority: 5
         });
       } catch (error) {
-        return handleQueueError(res, error, 'Rule-based detection queue');
+        // Check if it's a Redis connection error
+        if (isRedisError(error)) {
+          console.warn('[SECURITY] Redis unavailable, automatically falling back to sync mode');
+          fallbackToSync = true;
+          // Fall through to sync processing below
+        } else {
+          // For non-Redis errors, return the error
+          return handleQueueError(res, error, 'Rule-based detection queue');
+        }
       }
 
-      const jobId = result.jobId;
+      if (!fallbackToSync) {
+        const jobId = result.jobId;
       console.log('[SECURITY] Job queued:', jobId, 'Waiting for completion...');
 
       // Create session in session manager
@@ -580,11 +590,12 @@ router.post('/rule-based/offline', async (req, res) => {
         await new Promise(resolve => setTimeout(resolve, pollInterval));
       }
 
-      // Timeout
-      return res.status(408).send('Request timeout: Rule-based detection took too long');
+        // Timeout
+        return res.status(408).send('Request timeout: Rule-based detection took too long');
+      }
     }
 
-    // OLD: Direct processing (blocking) - only if useQueue=false
+    // Direct processing (blocking) - used when useQueue=false OR when Redis is unavailable
     console.log('[SECURITY][rule-based][offline] Using direct processing (blocking) for session:', sessionId);
 
     const outDir = path.join(SECURITY_OUT_DIR, `offline-${sessionId}`);
@@ -632,14 +643,21 @@ router.post('/rule-based/offline', async (req, res) => {
         alertCount: uniqueAlerts.length
       });
 
-      res.send({
+      const response = {
         ok: true,
         sessionId,
         file,
         count: uniqueAlerts.length,
         alerts: uniqueAlerts,
         ruleVerdicts
-      });
+      };
+
+      if (fallbackToSync) {
+        response.warning = 'Redis/Valkey service is unavailable. Automatically switched to synchronous processing mode.';
+        response.message = 'Rule-based detection completed in sync mode (Redis unavailable, automatic fallback)';
+      }
+
+      res.send(response);
     });
   } catch (e) {
     res.status(500).send(e.message || 'Failed to run offline rule-based detection');

@@ -27,7 +27,7 @@ fi
 
 # Set environment variables
 export USE_SUDO=${USE_SUDO:-false}
-export NODE_ENV=${NODE_ENV:-production}
+export NODE_ENV=${NODE_ENV:-development}
 
 echo "Environment: DOCKER_ENV=$DOCKER_ENV, USE_SUDO=$USE_SUDO, NODE_ENV=$NODE_ENV"
 

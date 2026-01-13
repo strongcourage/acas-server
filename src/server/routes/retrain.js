@@ -4,7 +4,7 @@ const {
   retrainModel,
 } = require('../deep-learning/deep-learning-connector');
 const { queueRetrain, getJobStatus } = require('../queue/job-queue');
-const { handleQueueError } = require('../utils/queueErrorHelper');
+const { handleQueueError, isRedisError } = require('../utils/queueErrorHelper');
 
 const router = express.Router();
 
@@ -67,6 +67,7 @@ router.post('/offline', async (req, res) => {
     // Queue-based approach is ENABLED BY DEFAULT
     const useQueueDefault = process.env.USE_QUEUE_BY_DEFAULT !== 'false';
     const shouldUseQueue = useQueue !== undefined ? useQueue : useQueueDefault;
+    let fallbackToSync = false;
 
     if (shouldUseQueue) {
       let jobInfo;
@@ -80,22 +81,30 @@ router.post('/offline', async (req, res) => {
           isACApp: isACApp || false,
           priority: 5
         });
+        
+        return res.json({
+          success: true,
+          useQueue: true,
+          jobId: jobInfo.jobId,
+          queueName: jobInfo.queueName,
+          position: jobInfo.position,
+          estimatedWait: jobInfo.estimatedWait,
+          message: 'Retrain job queued successfully'
+        });
       } catch (error) {
-        return handleQueueError(res, error, 'Retrain queue');
+        // Check if it's a Redis connection error
+        if (isRedisError(error)) {
+          console.warn('[Retrain] Redis unavailable, automatically falling back to sync mode');
+          fallbackToSync = true;
+          // Fall through to sync processing below
+        } else {
+          // For non-Redis errors, return the error
+          return handleQueueError(res, error, 'Retrain queue');
+        }
       }
-
-      return res.json({
-        success: true,
-        useQueue: true,
-        jobId: jobInfo.jobId,
-        queueName: jobInfo.queueName,
-        position: jobInfo.position,
-        estimatedWait: jobInfo.estimatedWait,
-        message: 'Retrain job queued successfully'
-      });
     }
 
-    // Direct processing (blocking) - only if useQueue=false
+    // Direct processing (blocking) - used when useQueue=false OR when Redis is unavailable
 
     const retrainConfig = {
       modelId,
@@ -112,13 +121,21 @@ router.post('/offline', async (req, res) => {
         });
       }
 
-      res.json({
+      const response = {
         success: true,
         useQueue: false,
         retrainId: retrainStatus.retrainId,
         ...retrainStatus,
-        message: 'Retrain started (blocking mode)'
-      });
+        message: fallbackToSync 
+          ? 'Retrain started in sync mode (Redis unavailable, automatic fallback)' 
+          : 'Retrain started (blocking mode)'
+      };
+
+      if (fallbackToSync) {
+        response.warning = 'Redis/Valkey service is unavailable. Automatically switched to synchronous processing mode.';
+      }
+
+      res.json(response);
     });
 
   } catch (error) {

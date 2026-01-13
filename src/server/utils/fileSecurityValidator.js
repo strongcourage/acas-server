@@ -8,8 +8,8 @@ const fs = require('fs');
 const path = require('path');
 const { PCAP_EXTENSIONS } = require('../constants');
 
-// Maximum file size: 10 MB (configurable via environment variable)
-const MAX_FILE_SIZE = parseInt(process.env.MAX_PCAP_SIZE) || 10 * 1024 * 1024; // 10 MB in bytes
+// Maximum file size: 20 MB (configurable via environment variable)
+const MAX_FILE_SIZE = parseInt(process.env.MAX_PCAP_SIZE) || 20 * 1024 * 1024; // 20 MB in bytes
 
 // PCAP magic numbers (file signatures)
 const PCAP_MAGIC_NUMBERS = [

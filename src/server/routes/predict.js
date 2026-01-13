@@ -6,7 +6,7 @@ const {
 } = require('../deep-learning/deep-learning-connector');
 const { listNetworkInterfaces } = require('../utils/utils');
 const { queuePrediction, getJobStatus } = require('../queue/job-queue');
-const { handleQueueError } = require('../utils/queueErrorHelper');
+const { handleQueueError, isRedisError } = require('../utils/queueErrorHelper');
 const { v4: uuidv4 } = require('uuid');
 
 const router = express.Router();
@@ -107,6 +107,7 @@ router.post('/offline', async (req, res) => {
     // Queue-based approach is ENABLED BY DEFAULT
     const useQueueDefault = process.env.USE_QUEUE_BY_DEFAULT !== 'false';
     const shouldUseQueue = useQueue !== undefined ? useQueue : useQueueDefault;
+    let fallbackToSync = false;
 
     if (shouldUseQueue) {
       console.log('[Prediction] Using queue-based processing for model:', modelId);
@@ -124,23 +125,31 @@ router.post('/offline', async (req, res) => {
           predictionId,
           priority: 5
         });
+        
+        return res.json({
+          success: true,
+          useQueue: true,
+          predictionId,
+          jobId: jobInfo.jobId,
+          queueName: jobInfo.queueName,
+          position: jobInfo.position,
+          estimatedWait: jobInfo.estimatedWait,
+          message: 'Prediction job queued successfully'
+        });
       } catch (error) {
-        return handleQueueError(res, error, 'Prediction queue');
+        // Check if it's a Redis connection error
+        if (isRedisError(error)) {
+          console.warn('[Prediction] Redis unavailable, automatically falling back to sync mode');
+          fallbackToSync = true;
+          // Fall through to sync processing below
+        } else {
+          // For non-Redis errors, return the error
+          return handleQueueError(res, error, 'Prediction queue');
+        }
       }
-
-      return res.json({
-        success: true,
-        useQueue: true,
-        predictionId,
-        jobId: jobInfo.jobId,
-        queueName: jobInfo.queueName,
-        position: jobInfo.position,
-        estimatedWait: jobInfo.estimatedWait,
-        message: 'Prediction job queued successfully'
-      });
     }
 
-    // OLD: Direct processing (blocking) - only if useQueue=false
+    // Direct processing (blocking) - used when useQueue=false OR when Redis is unavailable
     console.log('[Prediction] Using direct processing (blocking) for model:', modelId);
 
     // Use existing direct prediction method (legacy)
@@ -160,13 +169,21 @@ router.post('/offline', async (req, res) => {
         });
       }
 
-      res.json({
+      const response = {
         success: true,
         useQueue: false,
         predictionId: predictingStatus.lastPredictedId,
         ...predictingStatus,
-        message: 'Prediction started (blocking mode)'
-      });
+        message: fallbackToSync 
+          ? 'Prediction started in sync mode (Redis unavailable, automatic fallback)' 
+          : 'Prediction started (blocking mode)'
+      };
+
+      if (fallbackToSync) {
+        response.warning = 'Redis/Valkey service is unavailable. Automatically switched to synchronous processing mode.';
+      }
+
+      res.json(response);
     });
 
   } catch (error) {

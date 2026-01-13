@@ -21,6 +21,7 @@ const MENU_OPTIONS = [
   { key: '16', link: '/about' },
   { key: '17', link: '/features' },
   { key: '18', link: '/predict/rule-based' },
+  { key: '19', link: '/network' },
   { key: '20', link: '/dpi' }
 ];
 
@@ -854,8 +855,9 @@ const LABEL_MAPPING_AD = {
 };
 
 // File upload constraints
-const MAX_PCAP_SIZE_BYTES = 10 * 1024 * 1024; // 10 MB
-const MAX_PCAP_SIZE_MB = 10;
+// Read from environment variable (must be set before build) or default to 20 MB
+const MAX_PCAP_SIZE_BYTES = parseInt(process.env.REACT_APP_MAX_PCAP_SIZE) || (20 * 1024 * 1024);
+const MAX_PCAP_SIZE_MB = MAX_PCAP_SIZE_BYTES / (1024 * 1024);
 
 export {
   MENU_OPTIONS,
