@@ -2513,6 +2513,13 @@
                   "excludeRules" : {"type" : "array", "items" : {"type" : "string"}},
                   "cores" : {"type" : "number"}
                 }
+              },
+              "example" : {
+                "iface" : "eth0",
+                "intervalSec" : 5,
+                "verbose" : true,
+                "excludeRules" : [""],
+                "cores" : 1
               }
             }
           }
