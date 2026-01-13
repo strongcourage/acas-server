@@ -138,12 +138,19 @@ app.use((req, res, next) => {
   next();
 }); */
 
-app.use(expressCspHeader({
-  policies: {
-    'default-src': [expressCspHeader.NONE],
-    'img-src': [expressCspHeader.SELF],
+// Apply CSP headers but exclude Swagger UI routes
+app.use((req, res, next) => {
+  // Skip CSP for Swagger UI to allow it to load properly
+  if (req.path.startsWith('/docs')) {
+    return next();
   }
-}));
+  expressCspHeader({
+    policies: {
+      'default-src': [expressCspHeader.NONE],
+      'img-src': [expressCspHeader.SELF],
+    }
+  })(req, res, next);
+});
 
 app.use('/api/mmt', mmtRouter);
 app.use('/api/pcaps', pcapRouter);

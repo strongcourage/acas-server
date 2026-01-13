@@ -646,64 +646,6 @@ router.post('/rule-based/offline', async (req, res) => {
   }
 });
 
-router.post('/block-ip', async (req, res) => {
-  try {
-    const { ip, direction } = req.body || {};
-    if (!isValidIPv4(ip)) {
-      return res.status(400).send('Invalid IPv4 address');
-    }
-
-    const cmds = [];
-    const quotedIp = ip.replace(/"/g, '');
-    if (!direction || direction === 'in' || direction === 'both') {
-      cmds.push(`${SUDO}iptables -I INPUT -s ${quotedIp} -j DROP`);
-    }
-    if (!direction || direction === 'out' || direction === 'both') {
-      cmds.push(`${SUDO}iptables -I OUTPUT -d ${quotedIp} -j DROP`);
-    }
-
-    const fullCmd = cmds.join(' && ');
-    console.log('[SECURITY] Executing:', fullCmd);
-    exec(fullCmd, (error, stdout, stderr) => {
-      if (error) {
-        console.error('iptables error:', stderr || error.message);
-        return res.status(500).send(stderr || error.message);
-      }
-      res.send({ ok: true, command: fullCmd, stdout });
-    });
-  } catch (e) {
-    console.error('block-ip error:', e);
-    res.status(500).send(e.message || 'block-ip failed');
-  }
-});
-
-// Publish a single flow record to NATS
-// Body: { payload: object, subject?: string, natsUrl?: string, username?: string, password?: string }
-router.post('/nats-publish', async (req, res) => {
-  try {
-    const { payload, subject, natsUrl, username, password } = req.body || {};
-    if (!payload) return res.status(400).send('Missing payload');
-
-    const nc = await getNatsConnection(natsUrl, username, password);
-    const sc = StringCodec();
-    const subj = subject || (process.env.NATS_SUBJECT && process.env.NATS_SUBJECT.trim());
-    if (!subj) {
-      await nc.close();
-      return res.status(400).send('Missing NATS subject (set NATS_SUBJECT env or pass subject)');
-    }
-
-    const data = JSON.stringify({ type: 'flow', payload });
-    await nc.publish(subj, sc.encode(data));
-    await nc.flush();
-    await nc.close();
-
-    res.send({ ok: true, subject: subj });
-  } catch (e) {
-    console.error('NATS publish error:', e);
-    res.status(500).send(e.message || 'NATS publish failed');
-  }
-});
-
 // Publish multiple flow records to NATS in bulk
 // Body: { payloads: array, subject?: string, natsUrl?: string, username?: string, password?: string }
 router.post('/nats-publish/bulk', async (req, res) => {
@@ -921,27 +863,6 @@ router.post('/nats-publish/dataset', async (req, res) => {
   } catch (e) {
     console.error('NATS dataset publish error:', e);
     res.status(500).send(e.message || 'NATS dataset publish failed');
-  }
-});
-
-router.post('/block-port', async (req, res) => {
-  try {
-    const { port, protocol = 'tcp' } = req.body || {};
-    const p = Number(port);
-    if (!p || p < 1 || p > 65535) return res.status(400).send('Invalid port');
-    const proto = ['tcp', 'udp'].includes(String(protocol).toLowerCase()) ? String(protocol).toLowerCase() : 'tcp';
-    const cmd = `${SUDO}iptables -I INPUT -p ${proto} --dport ${p} -j DROP && ${SUDO}iptables -I OUTPUT -p ${proto} --sport ${p} -j DROP`;
-    console.log('[SECURITY] Executing:', cmd);
-    exec(cmd, (error, stdout, stderr) => {
-      if (error) {
-        console.error('iptables error:', stderr || error.message);
-        return res.status(500).send(stderr || error.message);
-      }
-      res.send({ ok: true, command: cmd, stdout });
-    });
-  } catch (e) {
-    console.error('block-port error:', e);
-    res.status(500).send(e.message || 'block-port failed');
   }
 });
 

@@ -34,36 +34,6 @@ function showCommandsModal({ title, preview }) {
 }
 
 // Security helpers
-export async function blockIp(ipAddress) {
-  if (!ipAddress) {
-    message.warning('No IP address found for this row');
-    return;
-  }
-  try {
-    const res = await fetch(`${SERVER_URL}/api/security/block-ip`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ip: String(ipAddress).trim() }),
-    });
-    if (!res.ok) {
-      const errText = await res.text();
-      throw new Error(errText || 'Failed to block IP');
-    }
-    notification.success({
-      message: 'Action submitted',
-      description: `Block rule created for ${ipAddress}`,
-      placement: 'topRight',
-    });
-  } catch (e) {
-    notification.error({
-      message: 'Action failed',
-      description: e.message,
-      placement: 'topRight',
-    });
-    throw e;
-  }
-}
-
 // Bulk mitigation dispatcher for an array of rows (e.g., all malicious flows)
 export async function handleBulkMitigationAction({ actionKey, rows, isValidIPv4, entityLabel = 'flows', titleOverride }) {
   const list = Array.isArray(rows) ? rows : [];
@@ -161,32 +131,6 @@ export async function handleBulkMitigationAction({ actionKey, rows, isValidIPv4,
   }
 
   Modal.confirm({ title: titleOverride || titleMap[actionKey] || 'Confirm bulk action', content: lines.join('\n'), onOk: perform });
-}
-
-export async function blockPort(port, protocol = 'tcp') {
-  if (!port) {
-    message.warning('No destination port available');
-    return;
-  }
-  try {
-    const res = await fetch(`${SERVER_URL}/api/security/block-port`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ port: Number(port), protocol }),
-    });
-    if (!res.ok) throw new Error(await res.text());
-    notification.success({
-      message: 'Action submitted',
-      description: `Block rule created for ${protocol.toUpperCase()} port ${port}`,
-      placement: 'topRight',
-    });
-  } catch (e) {
-    notification.error({
-      message: 'Action failed',
-      description: e.message,
-      placement: 'topRight',
-    });
-  }
 }
 
 export async function blockIpPort(ipAddress, port, protocol = 'tcp') {
@@ -379,34 +323,6 @@ export function showNatsConfigModal() {
   });
 }
 
-export async function sendToNats({ payload, natsUrl, subject, username, password }) {
-  try {
-    const res = await fetch(`${SERVER_URL}/api/security/nats-publish`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        payload: (() => { const copy = { ...payload }; delete copy.key; return copy; })(),
-        natsUrl,
-        subject,
-        username: username || undefined,
-        password: password || undefined
-      }),
-    });
-    if (!res.ok) throw new Error(await res.text());
-    notification.success({
-      message: 'Sent to NATS',
-      description: `Published to subject: ${subject || 'server default'}`,
-      placement: 'topRight',
-    });
-  } catch (e) {
-    notification.error({
-      message: 'Publish failed',
-      description: e.message,
-      placement: 'topRight',
-    });
-  }
-}
-
 // UI: Confirm content with toggle and copy button
 function ConfirmActionContent({ preview, defaultMode = 'show', onModeChange }) {
   const [mode, setMode] = React.useState(defaultMode);
@@ -487,8 +403,6 @@ function buildCommandPreview(actionKey, params) {
     }
     case 'rate-limit-src':
       return `sudo iptables -I INPUT -s ${srcIp} -p tcp --dport ${dport} -m limit --limit ${limit} --limit-burst ${burst} -j ACCEPT\nsudo iptables -I INPUT -s ${srcIp} -p tcp --dport ${dport} -j DROP`;
-    case 'send-nats':
-      return `POST ${SERVER_URL}/api/security/nats-publish with server default subject (env NATS_SUBJECT)`;
     default:
       return '';
   }
@@ -567,25 +481,6 @@ export function handleMitigationAction({ actionKey, srcIp, dstIp, sessionId, dpo
         });
       } else {
         message.warning('Missing src IP or port for rate limit');
-      }
-      break;
-    case 'send-nats':
-      if (flowRecord) {
-        showNatsConfigModal()
-          .then(config => sendToNats({
-            payload: flowRecord,
-            natsUrl: config.natsUrl,
-            subject: config.subject,
-            username: config.username,
-            password: config.password
-          }))
-          .catch(err => {
-            if (err.message !== 'Cancelled') {
-              message.error('Failed to get NATS configuration');
-            }
-          });
-      } else {
-        message.warning('No flow data to send');
       }
       break;
     default:
