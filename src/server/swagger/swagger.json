@@ -554,7 +554,7 @@
       "post" : {
         "tags" : [ "pcaps" ],
         "summary" : "Upload a pcap file",
-        "description" : "Update a pcap file to analyse",
+        "description" : "Upload a pcap file to analyse. Authentication is required in production but optional for development/testing.",
         "operationId" : "uploadPcap",
         "requestBody" : {
           "content" : {

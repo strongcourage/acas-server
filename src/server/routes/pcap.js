@@ -225,8 +225,9 @@ router.post('/', async (req, res) => {
 
     // In production, block anonymous users from uploading
     // In development/local, allow anonymous uploads for testing
-    const isDevelopment = process.env.NODE_ENV !== 'production';
-    if (isAnonymous && !isDevelopment) {
+    // If NODE_ENV is not explicitly set to 'production', allow anonymous uploads
+    const isProduction = process.env.NODE_ENV === 'production';
+    if (isAnonymous && isProduction) {
       console.warn(`[PCAP] Upload rejected: Anonymous users cannot upload files in production`);
       return res.status(401).json({
         error: 'Authentication required',
@@ -234,8 +235,8 @@ router.post('/', async (req, res) => {
       });
     }
 
-    if (isAnonymous && isDevelopment) {
-      console.log(`[PCAP] Allowing anonymous upload in development mode for user: ${userId}`);
+    if (isAnonymous) {
+      console.log(`[PCAP] Allowing anonymous upload for testing (user: ${userId})`);
     }
 
     // Log upload attempt
