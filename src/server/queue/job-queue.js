@@ -20,22 +20,20 @@ const REDIS_URL = process.env.REDIS_URL || 'redis://127.0.0.1:6379';
 
 // Redis connection options with retry logic
 const redisOptions = {
-  enableOfflineQueue: true,  // Allow buffering during initial connection
-  connectTimeout: 10000,     // Timeout after 10 seconds
-  maxRetriesPerRequest: 3,   // Retry up to 3 times
+  enableOfflineQueue: true,   // Allow buffering during initial connection
+  connectTimeout: 5000,       // Timeout after 5 seconds
+  maxRetriesPerRequest: 1,    // Fail fast on request
   retryStrategy: (times) => {
-    if (times > 10) {
-      console.error('[Redis] Max connection retries reached');
-      return null; // Stop retrying after 10 attempts
+    if (times > 3) {
+      // Stop retrying after 3 attempts
+      return null;
     }
-    const delay = Math.min(times * 500, 2000);
-    console.log(`[Redis] Retry attempt ${times}, waiting ${delay}ms`);
+    const delay = Math.min(times * 500, 1500);
     return delay;
   },
   reconnectOnError: (err) => {
     const targetErrors = ['READONLY', 'ECONNRESET', 'ETIMEDOUT'];
     if (targetErrors.some(e => err.message.includes(e))) {
-      console.log('[Redis] Reconnecting due to:', err.message);
       return true; // Reconnect on specific errors
     }
     return false;
@@ -56,98 +54,139 @@ const baseQueueOptions = {
   }
 };
 
-// Create queues for different job types
-const featureQueue = new Queue('feature-extraction', REDIS_URL, baseQueueOptions);
+// Try to create queues with proper error handling
+let featureQueue, trainingQueue, predictionQueue, ruleBasedQueue, xaiQueue, attackQueue, retrainQueue;
+let REDIS_AVAILABLE = false;
 
-const trainingQueue = new Queue('model-training', REDIS_URL, {
-  ...baseQueueOptions,
-  defaultJobOptions: {
-    ...baseQueueOptions.defaultJobOptions,
-    attempts: 2,
-    backoff: {
-      type: 'exponential',
-      delay: 5000
-    },
-    removeOnComplete: 50,
-    removeOnFail: 25
-  }
-});
+try {
+  // Create queues for different job types
+  featureQueue = new Queue('feature-extraction', REDIS_URL, baseQueueOptions);
 
-const predictionQueue = new Queue('prediction', REDIS_URL, baseQueueOptions);
-
-const ruleBasedQueue = new Queue('rule-based-detection', REDIS_URL, {
-  ...baseQueueOptions,
-  defaultJobOptions: {
-    ...baseQueueOptions.defaultJobOptions,
-    attempts: 2,
-    backoff: {
-      type: 'exponential',
-      delay: 2000
+  trainingQueue = new Queue('model-training', REDIS_URL, {
+    ...baseQueueOptions,
+    defaultJobOptions: {
+      ...baseQueueOptions.defaultJobOptions,
+      attempts: 2,
+      backoff: {
+        type: 'exponential',
+        delay: 5000
+      },
+      removeOnComplete: 50,
+      removeOnFail: 25
     }
-  }
-});
-
-const xaiQueue = new Queue('xai-explanations', REDIS_URL, {
-  ...baseQueueOptions,
-  defaultJobOptions: {
-    ...baseQueueOptions.defaultJobOptions,
-    attempts: 2,
-    backoff: {
-      type: 'exponential',
-      delay: 3000
-    },
-    timeout: 10 * 60 * 1000 // 10 minutes timeout for XAI (can be slow)
-  }
-});
-
-const attackQueue = new Queue('adversarial-attacks', REDIS_URL, {
-  ...baseQueueOptions,
-  defaultJobOptions: {
-    ...baseQueueOptions.defaultJobOptions,
-    attempts: 2,
-    backoff: {
-      type: 'exponential',
-      delay: 5000
-    },
-    removeOnComplete: 50,
-    removeOnFail: 25,
-    timeout: 15 * 60 * 1000 // 15 minutes timeout for attacks
-  }
-});
-
-const retrainQueue = new Queue('model-retraining', REDIS_URL, {
-  ...baseQueueOptions,
-  defaultJobOptions: {
-    ...baseQueueOptions.defaultJobOptions,
-    attempts: 2,
-    backoff: {
-      type: 'exponential',
-      delay: 5000
-    },
-    removeOnComplete: 50,
-    removeOnFail: 25,
-    timeout: 30 * 60 * 1000 // 30 minutes timeout for retraining
-  },
-  settings: {
-    lockDuration: 30 * 60 * 1000,
-    stalledInterval: 5 * 60 * 1000,
-    maxStalledCount: 2
-  }
-});
-
-// Add error handlers to prevent crashes
-const queues = [featureQueue, trainingQueue, predictionQueue, ruleBasedQueue, xaiQueue, attackQueue, retrainQueue];
-queues.forEach(queue => {
-  queue.on('error', (error) => {
-    console.error(`[Queue ${queue.name}] Error:`, error.message);
   });
-  
-  queue.on('failed', (job, err) => {
-    console.error(`[Queue ${queue.name}] Job ${job.id} failed:`, err.message);
-  });
-});
 
-console.log('[Queue] All queues initialized with error handlers');
+  predictionQueue = new Queue('prediction', REDIS_URL, baseQueueOptions);
+
+  ruleBasedQueue = new Queue('rule-based-detection', REDIS_URL, {
+    ...baseQueueOptions,
+    defaultJobOptions: {
+      ...baseQueueOptions.defaultJobOptions,
+      attempts: 2,
+      backoff: {
+        type: 'exponential',
+        delay: 2000
+      }
+    }
+  });
+
+  xaiQueue = new Queue('xai-explanations', REDIS_URL, {
+    ...baseQueueOptions,
+    defaultJobOptions: {
+      ...baseQueueOptions.defaultJobOptions,
+      attempts: 2,
+      backoff: {
+        type: 'exponential',
+        delay: 3000
+      },
+      timeout: 10 * 60 * 1000 // 10 minutes timeout for XAI (can be slow)
+    }
+  });
+
+  attackQueue = new Queue('adversarial-attacks', REDIS_URL, {
+    ...baseQueueOptions,
+    defaultJobOptions: {
+      ...baseQueueOptions.defaultJobOptions,
+      attempts: 2,
+      backoff: {
+        type: 'exponential',
+        delay: 5000
+      },
+      removeOnComplete: 50,
+      removeOnFail: 25,
+      timeout: 15 * 60 * 1000 // 15 minutes timeout for attacks
+    }
+  });
+
+  retrainQueue = new Queue('model-retraining', REDIS_URL, {
+    ...baseQueueOptions,
+    defaultJobOptions: {
+      ...baseQueueOptions.defaultJobOptions,
+      attempts: 2,
+      backoff: {
+        type: 'exponential',
+        delay: 5000
+      },
+      removeOnComplete: 50,
+      removeOnFail: 25,
+      timeout: 30 * 60 * 1000 // 30 minutes timeout for retraining
+    },
+    settings: {
+      lockDuration: 30 * 60 * 1000,
+      stalledInterval: 5 * 60 * 1000,
+      maxStalledCount: 2
+    }
+  });
+
+  // Add error handlers to prevent crashes
+  const queues = [featureQueue, trainingQueue, predictionQueue, ruleBasedQueue, xaiQueue, attackQueue, retrainQueue];
+  queues.forEach(queue => {
+    queue.on('error', (error) => {
+      // Suppress connection errors, only log unexpected errors
+      if (!error.message.includes('ECONNREFUSED') && !error.message.includes('Connection refused')) {
+        console.error(`[Queue ${queue.name}] Error:`, error.message);
+      }
+      REDIS_AVAILABLE = false;
+    });
+
+    queue.on('failed', (job, err) => {
+      console.error(`[Queue ${queue.name}] Job ${job.id} failed:`, err.message);
+    });
+
+    queue.on('ready', () => {
+      REDIS_AVAILABLE = true;
+    });
+  });
+
+  // Test connection with timeout - use a more reliable method
+  const testConnection = async () => {
+    try {
+      // Get the Redis client from the queue and ping it
+      const client = await featureQueue.client;
+      await Promise.race([
+        client.ping(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Connection timeout')), 3000))
+      ]);
+      REDIS_AVAILABLE = true;
+      console.log('[Queue] Successfully connected to Redis/Valkey');
+    } catch (error) {
+      REDIS_AVAILABLE = false;
+      console.log('[Queue] Redis/Valkey not available - queue-based processing disabled');
+      console.log('[Queue] Server will run in synchronous mode. Set useQueue=false in API requests.');
+    }
+  };
+
+  // Call async but don't wait - status will update when connection completes
+  testConnection();
+
+} catch (error) {
+  REDIS_AVAILABLE = false;
+  console.log('[Queue] Failed to initialize queues - Redis/Valkey not available');
+  console.log('[Queue] Server will run in synchronous mode. Set useQueue=false in API requests.');
+
+  // Throw error to be caught by workers.js
+  throw error;
+}
 
 // Configure concurrency (number of parallel workers)
 const CONCURRENCY = {
@@ -358,7 +397,6 @@ const estimateWaitTime = async (queue, job) => {
       'rule-based-detection': 45
     }[queue.name] || 60;
 
-    const activeJobs = metrics.active || 0;
     const waitingJobs = position || metrics.waiting || 0;
     const workers = CONCURRENCY[queue.name.replace('-', '')] || 1;
 
@@ -539,5 +577,6 @@ module.exports = {
   getJobStatus,
   cancelJob,
   getQueueStats,
-  cleanupOldJobs
+  cleanupOldJobs,
+  isRedisAvailable: () => REDIS_AVAILABLE
 };

@@ -59,6 +59,22 @@ const queueRouter = require('./routes/queue');
 const dpiRouter = require('./routes/dpi');
 const networkRouter = require('./routes/network');
 
+// Handle unhandled promise rejections (e.g., Redis connection errors)
+process.on('unhandledRejection', (reason, promise) => {
+  // Suppress Redis connection errors - server continues in sync mode
+  if (reason && reason.message &&
+      (reason.message.includes('ECONNREFUSED') ||
+       reason.message.includes('Connection refused') ||
+       reason.message.includes("Stream isn't writeable") ||
+       reason.message.includes('enableOfflineQueue') ||
+       reason.message.includes('Redis'))) {
+    // Redis unavailable - already logged by queue initialization
+    return;
+  }
+  // Log other unhandled rejections
+  console.error('[Server] Unhandled Promise Rejection:', reason);
+});
+
 // Initialize queue workers (this starts all background workers)
 require('./queue/workers');
 
