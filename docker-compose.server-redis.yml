@@ -11,8 +11,6 @@ services:
     container_name: ndr_valkey
     image: valkey/valkey:7-alpine
     restart: unless-stopped
-    ports:
-      - "6379:6379"
     networks:
       - ndr_network
     command: valkey-server --appendonly yes
