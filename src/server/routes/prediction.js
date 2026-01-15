@@ -338,9 +338,9 @@ router.get('/:predictionId', (req, res, next) => {
       const lastLine = lines[lines.length - 1];
       const parts = lastLine.split(',').map(p => parseInt(p.trim(), 10) || 0);
 
-      const totalFlows = parts[0] || 0;
+      const normalFlows = parts[0] || 0;
       const attackFlows = parts[1] || 0;
-      const normalFlows = parts[2] || 0;
+      const totalFlows = parts[2] || 0;
 
       res.json({
         totalFlows,
@@ -350,8 +350,7 @@ router.get('/:predictionId', (req, res, next) => {
         normalPercentage: totalFlows > 0 ? ((normalFlows / totalFlows) * 100).toFixed(2) : '0.00',
         status: isOnlineMode && session?.isRunning ? 'running' : 'completed',
         intervals: lines.length,
-        // Include raw data for backward compatibility
-        raw: prediction
+        prediction: prediction
       });
     }
   });
