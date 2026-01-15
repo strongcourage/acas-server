@@ -26,6 +26,16 @@ const spawnCommand = (cmd, params, logFilePath, onCloseCallback = null, options 
     flags: 'a',
   });
 
+  // Flag to prevent calling callback twice (both 'error' and 'close' can fire)
+  let callbackCalled = false;
+  const safeCallback = (err) => {
+    if (callbackCalled) return;
+    callbackCalled = true;
+    if (onCloseCallback) {
+      onCloseCallback(err);
+    }
+  };
+
   // Execute command
   // Always PIPE so proc.stdout/proc.stderr are available (avoids null .on error)
   // We control console verbosity below without using stdio: 'inherit'
@@ -64,19 +74,14 @@ const spawnCommand = (cmd, params, logFilePath, onCloseCallback = null, options 
       console.log(`Process completed with code: ${code}`);
     }
 
-    if (onCloseCallback) {
-      return onCloseCallback(code !== 0 ? new Error(`Exit code: ${code}`) : null);
-    }
-    return null;
+    safeCallback(code !== 0 ? new Error(`Exit code: ${code}`) : null);
   });
 
-  // Handle errors
+  // Handle errors (e.g., command not found - ENOENT)
   proc.on('error', (error) => {
     logFile.end();
     console.error(`Failed to start process ${cmd}:`, error);
-    if (onCloseCallback) {
-      onCloseCallback(error);
-    }
+    safeCallback(error);
   });
 };
 
