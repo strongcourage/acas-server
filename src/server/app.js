@@ -189,11 +189,33 @@ app.use('/api/network', networkRouter);
 // Swagger API documentation - available in all modes at /docs
 app.use('/docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument));
 
-if (MODE === 'SERVER') {
-  app.use(express.static(path.join(__dirname, '../public')));
-  app.get('/*', function (req, res) {
-    res.sendFile(path.join(__dirname, '../public', 'index.html'));
+// Health check endpoint
+app.get('/health', (req, res) => {
+  res.json({
+    status: 'healthy',
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+    mode: MODE
   });
+});
+
+if (MODE === 'SERVER') {
+  // Check if public/index.html exists and is a real client app
+  const publicIndexPath = path.join(__dirname, '../public', 'index.html');
+  const hasClientApp = fs.existsSync(publicIndexPath) &&
+    fs.statSync(publicIndexPath).size > 1000; // Real React app is larger
+
+  if (hasClientApp) {
+    app.use(express.static(path.join(__dirname, '../public')));
+    app.get('/*', function (req, res) {
+      res.sendFile(publicIndexPath);
+    });
+  } else {
+    // No client app - redirect root to API docs
+    app.get('/', (req, res) => {
+      res.redirect('/docs');
+    });
+  }
 } else if (MODE === 'API') {
   // start Swagger API server
   app.use('/', swaggerUi.serve, swaggerUi.setup(swaggerDocument));
