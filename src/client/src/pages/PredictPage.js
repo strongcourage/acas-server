@@ -1288,8 +1288,13 @@ class PredictPage extends Component {
                   }
                   this.setState({
                     mode: value,
+                    modelId: null,
+                    interface: null,
                     predictStats: null,
                     attackRows: [],
+                    attackFlowColumns: [],
+                    mitigationColumns: [],
+                    attackCsv: null,
                     aggregateNormal: 0,
                     aggregateMalicious: 0,
                     hasResultsShown: false,
@@ -1323,7 +1328,19 @@ class PredictPage extends Component {
                   value={this.state.modelId}
                   disabled={isRunning}
                   onChange={(value) => {
-                    this.setState({ modelId: value, predictStats: null });
+                    // Clear prediction results when model is cleared
+                    if (!value) {
+                      this.setState({ 
+                        modelId: value, 
+                        predictStats: null,
+                        attackRows: [],
+                        attackFlowColumns: [],
+                        mitigationColumns: [],
+                        attackCsv: null
+                      });
+                    } else {
+                      this.setState({ modelId: value, predictStats: null });
+                    }
                     console.log(`Select model ${value}`);
                   }}
                   options={modelsOptions}
@@ -1493,7 +1510,22 @@ class PredictPage extends Component {
                   value={this.state.modelId}
                   disabled={isModelIdPresent || isRunningOnline}
                   onChange={(value) => {
-                    this.setState({ modelId: value });
+                    // Clear prediction results when model is cleared in online mode
+                    if (!value) {
+                      this.setState({ 
+                        modelId: value,
+                        predictStats: null,
+                        attackRows: [],
+                        attackFlowColumns: [],
+                        mitigationColumns: [],
+                        attackCsv: null,
+                        aggregateNormal: 0,
+                        aggregateMalicious: 0,
+                        hasResultsShown: false,
+                      });
+                    } else {
+                      this.setState({ modelId: value });
+                    }
                     console.log(`Select model ${value}`);
                   }}
                   options={modelsOptions}
@@ -1511,7 +1543,24 @@ class PredictPage extends Component {
                   allowClear showSearch
                   disabled={isRunningOnline}
                   value={this.state.interface}
-                  onChange={v => this.setState({ interface: v })}
+                  onChange={(v) => {
+                    // Clear prediction results when interface is cleared in online mode
+                    if (!v) {
+                      this.setState({ 
+                        interface: v,
+                        predictStats: null,
+                        attackRows: [],
+                        attackFlowColumns: [],
+                        mitigationColumns: [],
+                        attackCsv: null,
+                        aggregateNormal: 0,
+                        aggregateMalicious: 0,
+                        hasResultsShown: false,
+                      });
+                    } else {
+                      this.setState({ interface: v });
+                    }
+                  }}
                   options={this.state.interfacesOptions}
                 />
               </Col>
@@ -1526,6 +1575,7 @@ class PredictPage extends Component {
                     icon={<PlayCircleOutlined />}
                     onClick={this.handleButtonStart}
                     disabled={ isRunningOnline || !this.state.modelId || !this.state.interface }
+                    loading={isRunningOnline}
                   >
                     Start
                   </Button>
