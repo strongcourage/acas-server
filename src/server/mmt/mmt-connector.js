@@ -1,5 +1,6 @@
 /* eslint-disable no-console */
 const fs = require('fs');
+const { execSync } = require('child_process');
 const {
   PCAP_PATH,
   REPORT_PATH,
@@ -28,11 +29,45 @@ let mmtStatus = {
   isOnlineMode: false,
   // logFile: null, // can be reached by session id
   startedAt: null,
+  error: null, // Track any errors that occurred
 };
 
 // Logging configuration
 const VERBOSE_LOGGING = process.env.NODE_ENV !== 'production' && process.env.VERBOSE_LOGS === 'true';
 const logInfo = (...args) => VERBOSE_LOGGING && console.log(...args);
+
+// Sudo configuration - set USE_SUDO=false if mmt-probe has capabilities set
+const USE_SUDO = process.env.USE_SUDO !== 'false';
+
+/**
+ * Check if sudo -n (non-interactive) works
+ * Returns true if sudo access is available without password prompt
+ */
+const checkSudoAccess = () => {
+  if (!USE_SUDO) {
+    return true; // Not using sudo, no check needed
+  }
+  try {
+    // Test sudo -n with a harmless command
+    execSync('sudo -n true', { stdio: 'ignore' });
+    return true;
+  } catch (error) {
+    return false;
+  }
+};
+
+/**
+ * Check if mmt-probe has necessary capabilities for raw network access
+ * Returns true if capabilities are set
+ */
+const checkMmtProbeCapabilities = () => {
+  try {
+    const result = execSync('getcap $(which mmt-probe) 2>/dev/null || echo ""', { encoding: 'utf-8' });
+    return result.includes('cap_net_raw') || result.includes('cap_net_admin');
+  } catch (error) {
+    return false;
+  }
+};
 
 const runOnDataset = (pcapFiles, datasetPath, outputDir, logFilePath, onFinishCallback = null) => {
   logInfo(`runOnDataset : ${pcapFiles.length}`);
@@ -162,6 +197,23 @@ const startMMTOnline = (netInf, callback) => {
     });
   }
 
+  // Check if we have the necessary permissions for live capture
+  if (USE_SUDO) {
+    if (!checkSudoAccess()) {
+      console.error('[MMT] sudo -n failed: NOPASSWD not configured for current user');
+      return callback({
+        error: 'Live capture requires sudo access. Please configure sudoers for NOPASSWD or set USE_SUDO=false and grant mmt-probe capabilities.',
+        details: 'Run: sudo visudo and add: username ALL=(ALL) NOPASSWD: /usr/bin/mmt-probe\nOr: sudo setcap cap_net_raw,cap_net_admin=eip $(which mmt-probe) and set USE_SUDO=false',
+      });
+    }
+  } else {
+    // Check if mmt-probe has capabilities
+    if (!checkMmtProbeCapabilities()) {
+      console.warn('[MMT] mmt-probe may not have required capabilities for live capture');
+      // Don't block, just warn - it might still work if run as root
+    }
+  }
+
   const sessionId = getUniqueId();
   const outputDir = `${REPORT_PATH}report-${sessionId}/`;
   const logFilePath = `${LOG_PATH + sessionId}.log`;
@@ -172,10 +224,28 @@ const startMMTOnline = (netInf, callback) => {
     sessionId,
     isOnlineMode: true,
     startedAt: Date.now(),
+    error: null,
   };
-  spawnCommand('sudo', ['mmt-probe', '-c', MMT_PROBE_CONFIG_PATH, '-i', netInf, '-X', 'input.mode=ONLINE', '-X', `file-output.output-dir=${outputDir}`, '-X', 'file-output.sample-file=true'], logFilePath, () => {
+
+  // Build command based on USE_SUDO setting
+  const mmtArgs = ['-c', MMT_PROBE_CONFIG_PATH, '-i', netInf, '-X', 'input.mode=ONLINE', '-X', `file-output.output-dir=${outputDir}`, '-X', 'file-output.sample-file=true'];
+
+  // Callback to handle process completion/errors
+  const onProcessComplete = (error) => {
     mmtStatus.isRunning = false;
-  }, { suppressOutput: true });  // Suppress verbose mmt-probe output
+    if (error) {
+      console.error('[MMT] Process exited with error:', error.message);
+      mmtStatus.error = error.message;
+    }
+  };
+
+  if (USE_SUDO) {
+    // Use sudo -n (non-interactive) to avoid password prompts - requires sudoers config
+    spawnCommand('sudo', ['-n', 'mmt-probe', ...mmtArgs], logFilePath, onProcessComplete, { suppressOutput: true });
+  } else {
+    // Run directly - requires mmt-probe to have cap_net_raw,cap_net_admin capabilities
+    spawnCommand('mmt-probe', mmtArgs, logFilePath, onProcessComplete, { suppressOutput: true });
+  }
   return callback(mmtStatus);
 };
 
@@ -186,10 +256,17 @@ const stopMMT = (callback) => {
   logInfo(mmtStatus);
   if (mmtStatus.isRunning) {
     const logFilePath = `${LOG_PATH + mmtStatus.sessionId}.log`;
-    return spawnCommand('sudo', ['killall', 'mmt-probe'], logFilePath, () => {
-      mmtStatus.isRunning = false;
-      return callback(mmtStatus);
-    }, { suppressOutput: true });  // Suppress verbose killall output
+    if (USE_SUDO) {
+      return spawnCommand('sudo', ['-n', 'killall', 'mmt-probe'], logFilePath, () => {
+        mmtStatus.isRunning = false;
+        return callback(mmtStatus);
+      }, { suppressOutput: true });
+    } else {
+      return spawnCommand('killall', ['mmt-probe'], logFilePath, () => {
+        mmtStatus.isRunning = false;
+        return callback(mmtStatus);
+      }, { suppressOutput: true });
+    }
   }
   logInfo('MMT is not running');
   return callback(null);
@@ -203,4 +280,6 @@ module.exports = {
   startMMTForDataset,
   stopMMT,
   getMMTStatus,
+  checkSudoAccess,
+  checkMmtProbeCapabilities,
 };

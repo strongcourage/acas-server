@@ -660,6 +660,35 @@ export const requestPredictStatus = async () => {
   return data.predictingStatus;
 };
 
+// Online prediction API functions
+export const requestPredictOnlineStart = async (modelId, networkInterface) => {
+  const url = `${SERVER_URL}/api/predict/online`;
+  const response = await fetchWithAuth(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ modelId, interface: networkInterface })
+  });
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(error);
+  }
+  return await response.json();
+};
+
+export const requestPredictOnlineStatus = async () => {
+  const url = `${SERVER_URL}/api/predict/online/status`;
+  const response = await fetchWithAuth(url);
+  return await response.json();
+};
+
+export const requestPredictOnlineStop = async () => {
+  const url = `${SERVER_URL}/api/predict/online/stop`;
+  const response = await fetchWithAuth(url, {
+    method: 'POST'
+  });
+  return await response.json();
+};
+
 export const requestPredict = async (modelId, reportId, reportFileName, useQueue = true) => {
   // NEW: Use queue-based endpoint by default
   if (useQueue) {
@@ -692,6 +721,35 @@ export const requestPredict = async (modelId, reportId, reportFileName, useQueue
   return data;
 };
 
+/**
+ * Simplified offline prediction - server handles MMT analysis automatically
+ * @param {string} modelId - Model ID to use for prediction
+ * @param {string} pcapFile - PCAP filename (simplified mode)
+ * @param {boolean} useQueue - Use job queue (default: true)
+ */
+export const requestPredictOfflineSimplified = async (modelId, pcapFile, useQueue = true) => {
+  const url = `${SERVER_URL}/api/predict/offline`;
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ modelId, pcapFile, useQueue })
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    try {
+      const errorData = JSON.parse(errorText);
+      throw new Error(errorData.message || errorData.error || errorText);
+    } catch (e) {
+      throw new Error(errorText);
+    }
+  }
+  return response.json();
+};
+
+/**
+ * Legacy offline prediction - requires reportId and reportFileName
+ * @deprecated Use requestPredictOfflineSimplified instead
+ */
 export const requestPredictOfflineQueued = async (modelId, reportId, reportFileName) => {
   const url = `${SERVER_URL}/api/predict/offline`;
   const response = await fetch(url, {
@@ -736,19 +794,20 @@ export const requestPredictionsModel = async (modelId) => {
 };
 
 export const requestPredictStats = async (predictionId) => {
-  const url = `${SERVER_URL}/api/predictions/${predictionId}`;
-  const response = await fetch(url);
+  // Add timestamp to prevent caching for online predictions
+  const url = `${SERVER_URL}/api/predictions/${predictionId}?t=${Date.now()}`;
+  const response = await fetchWithAuth(url);
   const data = await response.json();
   if (data.error) {
     throw data.error;
   }
-  console.log(data.prediction);
   return data.prediction;
 };
 
 export const requestPredictionAttack = async (predictionId) => {
-  const url = `${SERVER_URL}/api/predictions/${predictionId}/attack`;
-  const response = await fetch(url);
+  // Add timestamp to prevent caching for online predictions
+  const url = `${SERVER_URL}/api/predictions/${predictionId}/attack?t=${Date.now()}`;
+  const response = await fetchWithAuth(url);
   if (!response.ok) {
     throw new Error(`Failed to fetch attack details for prediction ${predictionId}`);
   }

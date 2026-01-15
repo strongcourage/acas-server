@@ -2,11 +2,11 @@ import React, { Component } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import LayoutPage from './LayoutPage';
-import { Table, Tooltip, message, notification, Upload, Spin, Button, Form, Select, Menu, Modal, Divider, Card, Row, Col, Statistic, Tag, Space, InputNumber, Alert, Typography } from 'antd';
+import { Table, Tooltip, notification, Upload, Spin, Button, Form, Select, Menu, Modal, Divider, Card, Row, Col, Statistic, Tag, Space, Typography } from 'antd';
 import { UploadOutlined, CheckCircleOutlined, WarningOutlined, ClockCircleOutlined, PlayCircleOutlined, StopOutlined, LockOutlined, FileTextOutlined, SendOutlined, UserOutlined, DatabaseOutlined } from "@ant-design/icons";
 import { connect } from "react-redux";
 import { useUserRole } from '../hooks/useUserRole';
-import { Pie, RingProgress, Bar } from '@ant-design/plots';
+import { Pie, Bar } from '@ant-design/plots';
 import {
   FORM_LAYOUT,
   SERVER_URL,
@@ -24,13 +24,13 @@ import {
   requestRunLime,
 } from "../actions";
 import {
-  requestMMTStatus,
-  requestMMTOffline,
-  requestCsvReports,
   requestPredictStats,
   requestPredictionAttack,
   requestAssistantExplainFlow,
   requestPredictStatus as apiRequestPredictStatus,
+  requestPredictOnlineStart,
+  requestPredictOnlineStatus,
+  requestPredictOnlineStop,
 } from "../api";
 import {
   getFilteredModelsOptions,
@@ -58,15 +58,7 @@ class PredictPage extends Component {
       // Online mode
       interface: null,
       interfacesOptions: [],
-      windowSec: 10,
-      totalDurationSec: null,
-      isCapturing: false,
-      status: null,
-      lastProcessedFile: null,
-      processedFiles: [],
-      isProcessingSlice: false,
-      sessionDir: null,
-      processedCsvs: [],
+      isRunningOnline: false,
       
       // Shared state
       isRunning: (props.predictStatus && props.predictStatus.isRunning) ? props.predictStatus.isRunning : false,
@@ -84,7 +76,6 @@ class PredictPage extends Component {
       // Online aggregation
       aggregateNormal: 0,
       aggregateMalicious: 0,
-      lastSliceStats: null,
       hasResultsShown: false,
       lastShownPredictionId: null,
       lastStatsSignature: null,
@@ -100,7 +91,7 @@ class PredictPage extends Component {
     };
     this.handleButtonStart = this.handleButtonStart.bind(this);
     this.handleButtonStop = this.handleButtonStop.bind(this);
-    this.pollStatus = this.pollStatus.bind(this);
+    this.pollOnlineResults = this.pollOnlineResults.bind(this);
   }
 
   // Extract flow details (IPs, ports, rates, sessionId) from a record
@@ -184,7 +175,7 @@ class PredictPage extends Component {
         // Redirect non-admin users to offline mode
         this.setState({ mode: 'offline' });
         window.history.replaceState(null, '', '/predict/offline');
-        message.warning('Administrator privileges required for online predictions. Switched to offline mode.');
+        notification.warning({ message: 'Access Denied', description: 'Administrator privileges required for online predictions. Switched to offline mode.', placement: 'topRight' });
       }
     } else if (path === 'offline') {
       this.setState({ mode: 'offline' });
@@ -216,32 +207,14 @@ class PredictPage extends Component {
     } catch (e) {
       // ignore storage errors
     }
-    // If navigated from Feature Extraction with a pending PCAP/report, pre-select it and avoid re-running analysis
+    // If navigated from Feature Extraction with a pending PCAP, pre-select it
+    // Server now handles MMT analysis automatically when prediction is started
     try {
       const pending = localStorage.getItem('pendingPredictOfflinePcap');
-      const pendingReportId = localStorage.getItem('pendingPredictOfflineReportId');
       if (pending) {
-        this.setState({ mode: 'offline', testingPcapFile: pending, testingDataset: pendingReportId || null, predictStats: null }, async () => {
-          if (pendingReportId) {
-            // Also cache mapping for future reuse
-            try {
-              const raw = localStorage.getItem('pcapToReport');
-              let map = raw ? JSON.parse(raw) : {};
-              if (!map || typeof map !== 'object' || Array.isArray(map)) map = {};
-              map[pending] = pendingReportId;
-              localStorage.setItem('pcapToReport', JSON.stringify(map));
-            } catch (_) {}
-          } else {
-            const cached = this.getCachedReportForPcap(pending);
-            if (cached) {
-              this.setState({ testingDataset: cached });
-            } else {
-              await this.startAnalysisForPcap(pending);
-            }
-          }
-        });
+        this.setState({ mode: 'offline', testingPcapFile: pending, predictStats: null });
         localStorage.removeItem('pendingPredictOfflinePcap');
-        if (pendingReportId) localStorage.removeItem('pendingPredictOfflineReportId');
+        localStorage.removeItem('pendingPredictOfflineReportId');
       }
     } catch (e) {
       // ignore storage errors
@@ -298,47 +271,6 @@ class PredictPage extends Component {
     return null;
   }
 
-  // Start MMT offline analysis for a given PCAP and set testingDataset to the resulting report id
-  startAnalysisForPcap = async (pcapName) => {
-    if (!pcapName) return null;
-    const delay = (ms) => new Promise(res => setTimeout(res, ms));
-    try {
-      const startStatus = await requestMMTOffline(pcapName, this.props.userRole);
-      if (startStatus && startStatus.sessionId) {
-        const targetSessionId = startStatus.sessionId;
-        const maxAttempts = 60; // ~2 minutes
-        const intervalMs = 2000;
-        let attempt = 0;
-        while (attempt < maxAttempts) {
-          const status = await requestMMTStatus();
-          if (!status.isRunning && status.sessionId === targetSessionId) break;
-          await delay(intervalMs);
-          attempt += 1;
-        }
-        const reportId = `report-${targetSessionId}`;
-        this.setState({ testingDataset: reportId });
-        // Cache mapping for reuse later
-        try {
-          const raw = localStorage.getItem('pcapToReport');
-          let map = raw ? JSON.parse(raw) : {};
-          if (!map || typeof map !== 'object' || Array.isArray(map)) map = {};
-          map[pcapName] = reportId;
-          localStorage.setItem('pcapToReport', JSON.stringify(map));
-        } catch (e) {
-          // ignore storage errors
-        }
-        // Refresh reports list so the dataset appears in options
-        this.props.fetchAllReports && this.props.fetchAllReports();
-        notification.success({ message: 'Report ready', description: `Generated ${reportId} for ${pcapName}`, placement: 'topRight' });
-        return reportId;
-      }
-    } catch (e) {
-      console.error('Failed to start offline analysis:', e);
-      notification.error({ message: 'Analysis failed', description: e.message || String(e), placement: 'topRight' });
-    }
-    return null;
-  }
-
   beforeUploadPcap = (file) => {
     const hasValidExtension = file && (file.name.endsWith('.pcap') || file.name.endsWith('.pcapng') || file.name.endsWith('.cap'));
     if (!hasValidExtension) {
@@ -371,7 +303,7 @@ class PredictPage extends Component {
     } else if (status === 'done') {
       console.log(`Uploaded successfully ${name}`);
     } else if (status === 'error') {
-      message.error(`${name} upload failed.`);
+      notification.error({ message: 'Upload Failed', description: `${name} upload failed.`, placement: 'topRight' });
     }
   };
 
@@ -423,231 +355,187 @@ class PredictPage extends Component {
   }
 
   handlePredictOffline = async () => {
-    const delay = ms => new Promise(res => setTimeout(res, ms));
     const {
       modelId,
       testingPcapFile,
-      testingDataset,
       isRunning,
     } = this.state;
 
     let fetchModelId = isModelIdPresent ? getLastPath() : modelId;
-    let csvReports = [];
-    let updatedTestingDataset = null;
 
     if (!isRunning) {
       // Set isRunning immediately to disable button and show loading spinner
       this.setState({ isRunning: true });
-      if (testingDataset) {
-        updatedTestingDataset = testingDataset;
-      } else if (testingPcapFile) {
-        // Prefer existing mapping to avoid re-running analysis
-        const cached = this.getCachedReportForPcap(testingPcapFile);
-        if (cached) {
-          updatedTestingDataset = cached;
-          this.setState({ testingDataset: updatedTestingDataset });
-        } else {
-          // Start offline analysis and get the sessionId immediately
-          const startStatus = await requestMMTOffline(testingPcapFile, this.props.userRole);
-          if (startStatus && startStatus.sessionId) {
-            const targetSessionId = startStatus.sessionId;
-            // Poll MMT status until analysis completes (isRunning becomes false)
-            const maxAttempts = 60; // ~2 minutes
-            const intervalMs = 2000;
-            let attempt = 0;
-            while (attempt < maxAttempts) {
-              const status = await requestMMTStatus();
-              if (!status.isRunning && status.sessionId === targetSessionId) {
-                break;
-              }
-              await delay(intervalMs);
-              attempt += 1;
-            }
-            updatedTestingDataset = `report-${targetSessionId}`;
-            this.setState({ testingDataset: updatedTestingDataset });
-            // Cache mapping for future use
-            try {
-              const raw = localStorage.getItem('pcapToReport');
-              let map = raw ? JSON.parse(raw) : {};
-              if (!map || typeof map !== 'object' || Array.isArray(map)) map = {};
-              map[testingPcapFile] = updatedTestingDataset;
-              localStorage.setItem('pcapToReport', JSON.stringify(map));
-            } catch (_) {}
-          } else {
-            console.error('Failed to start MMT offline analysis or missing sessionId');
-            this.setState({ isRunning: false });
-            message.error('Failed to start MMT analysis');
-            return;
-          }
-        }
+
+      if (!testingPcapFile) {
+        this.setState({ isRunning: false });
+        notification.error({ message: 'Missing Input', description: 'Please upload a PCAP file first', placement: 'topRight' });
+        return;
       }
 
-      if (updatedTestingDataset) {
-        try {
-          csvReports = await requestCsvReports(updatedTestingDataset);
-          if (csvReports.length === 0) {
-            console.error(`Testing dataset is not valid!`);
-            this.setState({ isRunning: false });
-            message.error('Testing dataset is not valid');
-          } else {
-            // Queue-based prediction
-            console.log('Starting queued prediction:', csvReports[0], fetchModelId, updatedTestingDataset);
-            
-            // Call new queue-based API
-            const { requestPredictOfflineQueued, requestPredictJobStatus } = require('../api');
-            
-            try {
-              const queueResponse = await requestPredictOfflineQueued(fetchModelId, updatedTestingDataset, csvReports[0]);
-              
-              console.log('Prediction queued:', queueResponse);
-              this.setState({ 
-                currentJobId: queueResponse.jobId,
-                currentPredictionId: queueResponse.predictionId
-              });
-              
-              notification.success({
-                message: 'Prediction Job Queued',
-                description: 'Prediction has been queued successfully.',
-                placement: 'topRight',
-                duration: 2,
-              });
-              
-              // Poll job status instead of old predict status
-              this.intervalId = setInterval(async () => {
-              try {
-                const jobStatus = await requestPredictJobStatus(this.state.currentJobId);
-                console.log('Job status:', jobStatus.status, 'Progress:', jobStatus.progress);
-                
-                if (jobStatus.status === 'completed') {
-                  clearInterval(this.intervalId);
-                  this.intervalId = null;
-                  this.setState({ isRunning: false });
-                  
-                  // Load prediction results manually
-                  const predictionId = this.state.currentPredictionId;
-                  console.log('Prediction completed, loading results for:', predictionId);
-                  
-                  try {
-                    const { requestPredictStats, requestPredictionAttack } = require('../api');
-                    const predictStats = await requestPredictStats(predictionId);
-                    console.log('Fetched predictStats:', predictStats);
-                    
-                    let attackCsv = null;
-                    try {
-                      attackCsv = await requestPredictionAttack(predictionId);
-                    } catch (e) {
-                      console.warn('No attack CSV available:', e.message);
-                    }
-                    
-                    let attackRows = [];
-                    let attackFlowColumns = [];
-                    let mitigationColumns = [];
-                    
-                    if (attackCsv) {
-                      const built = buildAttackTable({
-                        csvString: attackCsv,
-                        onAction: (key, record) => this.onMitigationAction(key, record),
-                        buildMenu: (record, onAction) => {
-                          const { srcIp, dstIp, dport } = this.computeFlowDetails(record);
-                          const validSrc = this.isValidIPv4(srcIp);
-                          const validDst = this.isValidIPv4(dstIp);
-                          const validPort = this.isValidPort(dport);
-                          const { userRole } = this.props;
-                          const assistantDisabled = !userRole?.isSignedIn || userRole?.tokenLimitReached;
-                          return (
-                            <Menu onClick={({ key }) => onAction && onAction(key, record)}>
-                              <Menu.Item key="explain-gpt" disabled={assistantDisabled}>
-                                Ask Assistant
-                                {assistantDisabled && <LockOutlined style={{ marginLeft: 8, fontSize: '11px', color: '#ff4d4f' }} />}
-                              </Menu.Item>
-                              <Menu.Item key="explain-shap">Explain (XAI SHAP)</Menu.Item>
-                              <Menu.Item key="explain-lime">Explain (XAI LIME)</Menu.Item>
-                              <Menu.Divider />
-                              <Menu.Item key="block-src-ip" disabled={!validSrc}>
-                                {`Block source IP${validSrc ? ` ${srcIp}` : ''}`}
-                              </Menu.Item>
-                              <Menu.Item key="block-dst-ip" disabled={!validDst}>
-                                {`Block destination IP${validDst ? ` ${dstIp}` : ''}`}
-                              </Menu.Item>
-                              {validPort && (
-                                <>
-                                  <Menu.Divider />
-                                  <Menu.Item key="block-dst-port">
-                                    {`Block destination port ${dport}/tcp`}
-                                  </Menu.Item>
-                                </>
-                              )}
-                              <Menu.Divider />
-                              <Menu.Item key="drop-session" disabled={!(validSrc || validDst)}>
-                                {`Drop session${validSrc ? ` ${srcIp}` : validDst ? ` ${dstIp}` : ''}`}
-                              </Menu.Item>
-                              <Menu.Divider />
-                              <Menu.Item key="send-nats" disabled={!userRole?.isAdmin}>
-                                Send flow to NATS
-                                {!userRole?.isAdmin && <LockOutlined style={{ marginLeft: 8, fontSize: '11px', color: '#ff4d4f' }} />}
-                              </Menu.Item>
-                            </Menu>
-                          );
-                        }
-                      });
-                      attackRows = built.rows;
-                      attackFlowColumns = built.flowColumns;
-                      mitigationColumns = built.mitigationColumns;
-                    }
-                    
-                    this.setState({ 
-                      predictStats, 
-                      attackCsv, 
-                      attackRows, 
-                      attackFlowColumns, 
-                      mitigationColumns 
-                    });
-                    
-                    notification.success({
-                      message: 'Success',
-                      description: 'Prediction completed successfully!',
-                      placement: 'topRight',
-                    });
-                  } catch (error) {
-                    console.error('Error loading prediction results:', error);
-                    message.error('Failed to load prediction results: ' + error.message);
-                  }
-                } else if (jobStatus.status === 'failed') {
-                  clearInterval(this.intervalId);
-                  this.intervalId = null;
-                  this.setState({ isRunning: false });
-                  console.error('Prediction failed:', jobStatus.failedReason);
-                  message.error('Prediction failed: ' + jobStatus.failedReason);
-                }
-              } catch (error) {
-                console.error('Error polling job status:', error);
-              }
-            }, 2000);
-            } catch (error) {
-              console.error('Error queueing prediction:', error);
+      // Use simplified API - server handles MMT analysis automatically
+      const { requestPredictOfflineSimplified, requestPredictJobStatus } = require('../api');
+
+      try {
+        console.log('Starting simplified prediction for:', testingPcapFile, 'with model:', fetchModelId);
+
+        const queueResponse = await requestPredictOfflineSimplified(fetchModelId, testingPcapFile, true);
+
+        console.log('Prediction queued:', queueResponse);
+        this.setState({
+          currentJobId: queueResponse.jobId,
+          currentPredictionId: queueResponse.predictionId
+        });
+
+        notification.success({
+          message: 'Prediction Job Queued',
+          description: 'Server is analyzing PCAP and running prediction...',
+          placement: 'topRight',
+          duration: 3,
+        });
+
+        // Poll job status
+        this.intervalId = setInterval(async () => {
+          try {
+            const jobStatus = await requestPredictJobStatus(this.state.currentJobId);
+            console.log('Job status:', jobStatus.status, 'Progress:', jobStatus.progress);
+
+            if (jobStatus.status === 'completed') {
+              clearInterval(this.intervalId);
+              this.intervalId = null;
               this.setState({ isRunning: false });
-              message.error('Failed to queue prediction: ' + error.message);
+
+              // Load prediction results
+              const predictionId = this.state.currentPredictionId;
+              console.log('Prediction completed, loading results for:', predictionId);
+
+              try {
+                const { requestPredictStats, requestPredictionAttack } = require('../api');
+                const predictStats = await requestPredictStats(predictionId);
+                console.log('Fetched predictStats:', predictStats);
+
+                let attackCsv = null;
+                try {
+                  attackCsv = await requestPredictionAttack(predictionId);
+                } catch (e) {
+                  console.warn('No attack CSV available:', e.message);
+                }
+
+                let attackRows = [];
+                let attackFlowColumns = [];
+                let mitigationColumns = [];
+
+                if (attackCsv) {
+                  const built = buildAttackTable({
+                    csvString: attackCsv,
+                    onAction: (key, record) => this.onMitigationAction(key, record),
+                    buildMenu: (record, onAction) => {
+                      const { srcIp, dstIp, dport } = this.computeFlowDetails(record);
+                      const validSrc = this.isValidIPv4(srcIp);
+                      const validDst = this.isValidIPv4(dstIp);
+                      const validPort = this.isValidPort(dport);
+                      const { userRole } = this.props;
+                      const assistantDisabled = !userRole?.isSignedIn || userRole?.tokenLimitReached;
+                      return (
+                        <Menu onClick={({ key }) => onAction && onAction(key, record)}>
+                          <Menu.Item key="explain-gpt" disabled={assistantDisabled}>
+                            Ask Assistant
+                            {assistantDisabled && <LockOutlined style={{ marginLeft: 8, fontSize: '11px', color: '#ff4d4f' }} />}
+                          </Menu.Item>
+                          <Menu.Item key="explain-shap">Explain (XAI SHAP)</Menu.Item>
+                          <Menu.Item key="explain-lime">Explain (XAI LIME)</Menu.Item>
+                          <Menu.Divider />
+                          <Menu.Item key="block-src-ip" disabled={!validSrc}>
+                            {`Block source IP${validSrc ? ` ${srcIp}` : ''}`}
+                          </Menu.Item>
+                          <Menu.Item key="block-dst-ip" disabled={!validDst}>
+                            {`Block destination IP${validDst ? ` ${dstIp}` : ''}`}
+                          </Menu.Item>
+                          {validPort && (
+                            <>
+                              <Menu.Divider />
+                              <Menu.Item key="block-dst-port">
+                                {`Block destination port ${dport}/tcp`}
+                              </Menu.Item>
+                            </>
+                          )}
+                          <Menu.Divider />
+                          <Menu.Item key="drop-session" disabled={!(validSrc || validDst)}>
+                            {`Drop session${validSrc ? ` ${srcIp}` : validDst ? ` ${dstIp}` : ''}`}
+                          </Menu.Item>
+                          <Menu.Divider />
+                          <Menu.Item key="send-nats" disabled={!userRole?.isAdmin}>
+                            Send flow to NATS
+                            {!userRole?.isAdmin && <LockOutlined style={{ marginLeft: 8, fontSize: '11px', color: '#ff4d4f' }} />}
+                          </Menu.Item>
+                        </Menu>
+                      );
+                    }
+                  });
+                  attackRows = built.rows;
+                  attackFlowColumns = built.flowColumns;
+                  mitigationColumns = built.mitigationColumns;
+                }
+
+                this.setState({
+                  predictStats,
+                  attackCsv,
+                  attackRows,
+                  attackFlowColumns,
+                  mitigationColumns
+                });
+
+                notification.success({
+                  message: 'Success',
+                  description: 'Prediction completed successfully!',
+                  placement: 'topRight',
+                });
+              } catch (error) {
+                console.error('Error loading prediction results:', error);
+                notification.error({ message: 'Error', description: 'Failed to load prediction results: ' + error.message, placement: 'topRight' });
+              }
+            } else if (jobStatus.status === 'failed') {
+              clearInterval(this.intervalId);
+              this.intervalId = null;
+              this.setState({ isRunning: false });
+              console.error('Prediction failed:', jobStatus.failedReason);
+              notification.error({ message: 'Prediction Failed', description: jobStatus.failedReason, placement: 'topRight' });
             }
+          } catch (error) {
+            console.error('Error polling job status:', error);
           }
-        } catch (error) {
-          console.error('Error in requestCsvReports:', error);
-          this.setState({ isRunning: false });
-          message.error('Failed to process dataset: ' + error.message);
-        }
+        }, 2000);
+      } catch (error) {
+        console.error('Error starting prediction:', error);
+        this.setState({ isRunning: false });
+        notification.error({ message: 'Prediction Error', description: error.message || 'Failed to start prediction', placement: 'topRight' });
       }
     }
   }
 
   handleTablePredictStats = (csvData) => {
-    const values = csvData.trim().split('\n')[1].split(',');
-    const normalFlows = parseInt(values[0], 10);
-    const maliciousFlows = parseInt(values[1], 10);
+    // Handle empty or malformed CSV data
+    if (!csvData || typeof csvData !== 'string') {
+      return { tableConfig: { dataSource: [], columns: [], pagination: false }, normalFlows: 0, maliciousFlows: 0 };
+    }
+
+    const lines = csvData.trim().split('\n').filter(line => line.trim().length > 0);
+    if (lines.length === 0) {
+      return { tableConfig: { dataSource: [], columns: [], pagination: false }, normalFlows: 0, maliciousFlows: 0 };
+    }
+
+    // stats.csv has no header - just data rows (normal,attack,total)
+    // Use the last line for cumulative stats
+    const lastLine = lines[lines.length - 1];
+    const values = lastLine.split(',');
+    const normalFlows = parseInt(values[0], 10) || 0;
+    const maliciousFlows = parseInt(values[1], 10) || 0;
     const dataSource = [
       {
         key: 'data',
-        "Normal flows": values[0],
-        "Malicious flows": values[1],
-        "Total flows": values[2]
+        "Normal flows": values[0] || '0',
+        "Malicious flows": values[1] || '0',
+        "Total flows": values[2] || '0'
       }
     ];
     const columns = [
@@ -711,7 +599,7 @@ class PredictPage extends Component {
           // Don't clear dataset/pcap - keep them to show results
           // User can manually clear them if they want to run another prediction
         } else {
-          message.success('Online window prediction completed');
+          notification.success({ message: 'Completed', description: 'Online window prediction completed', placement: 'topRight' });
         }
         
         const lastPredictId = currPS.lastPredictedId || '';
@@ -822,7 +710,11 @@ class PredictPage extends Component {
     if ((this.state.loadedPredictionIds || []).includes(predictionId)) return;
     try {
       const predictStats = await requestPredictStats(predictionId);
-      const values = predictStats.trim().split('\n')[1].split(',');
+      // Handle empty or malformed predictStats
+      // stats.csv has no header - just data rows (normal,attack,total)
+      const lines = (predictStats || '').trim().split('\n').filter(line => line.trim().length > 0);
+      const lastLine = lines.length > 0 ? lines[lines.length - 1] : '0,0,0';
+      const values = lastLine.split(',');
       const normal = parseInt(values[0], 10) || 0;
       const malicious = parseInt(values[1], 10) || 0;
       const nextSignature = String(predictStats || '').trim();
@@ -900,7 +792,6 @@ class PredictPage extends Component {
         const canUpdateCharts = (predictionId !== prev.lastShownPredictionId) && (nextSignature !== prev.lastStatsSignature);
         return {
           predictStats: canUpdateCharts ? predictStats : prev.predictStats,
-          lastSliceStats: canUpdateCharts ? predictStats : prev.lastSliceStats,
           aggregateNormal: canUpdateCharts ? (prev.aggregateNormal + normal) : prev.aggregateNormal,
           aggregateMalicious: canUpdateCharts ? (prev.aggregateMalicious + malicious) : prev.aggregateMalicious,
           attackCsv,
@@ -1004,183 +895,209 @@ class PredictPage extends Component {
   }
 
   // Online mode: Poll status and process slices
-  async pollStatus() {
+  /**
+   * Poll online prediction results (replaces old tcpdump workflow)
+   */
+  async pollOnlineResults() {
+    // Check if we should still be polling
+    if (!this.state.isRunningOnline) {
+      return;
+    }
+
     try {
-      const res = await fetch(`${SERVER_URL}/api/online/status`);
-      const status = await res.json();
-      const prev = this.state.status || {};
-      const hasChanged = (
-        prev.running !== status.running ||
-        prev.pid !== status.pid ||
-        prev.lastFile !== status.lastFile ||
-        prev.prevFile !== status.prevFile
-      );
-      if (hasChanged) {
-        this.setState({ status, isCapturing: status.running, sessionDir: status.sessionDir || this.state.sessionDir });
-      }
-      const { isRunning, modelId, isProcessingSlice, processedFiles } = this.state;
-      const filesRes = await fetch(`${SERVER_URL}/api/online/files`);
-      const filesData = await filesRes.json();
-      const filesAsc = Array.isArray(filesData.files) ? filesData.files : [];
-      if (!isRunning && !isProcessingSlice && modelId && filesAsc.length > 0) {
-        const next = filesAsc.find(f => {
-          const base = String(f.file).split('/').pop();
-          return processedFiles.indexOf(base) === -1 && (f.ageMs === null || f.ageMs >= 1500);
-        });
-        if (next) {
-          const base = String(next.file).split('/').pop();
-          this.setState({ lastProcessedFile: next.file, processedFiles: [...processedFiles, base], isProcessingSlice: true });
-          await this.processSlice(next.file);
+      // Get online prediction status
+      const status = await requestPredictOnlineStatus();
+
+      if (!status.isRunning) {
+        // Prediction stopped
+        this.setState({ isRunningOnline: false });
+        if (this.statusTimer) {
+          clearInterval(this.statusTimer);
+          this.statusTimer = null;
         }
-      }
-      const remaining = filesAsc.some(f => processedFiles.indexOf(String(f.file).split('/').pop()) === -1);
-      if (!status.running && !remaining && this.statusTimer) {
-        console.log('[PollStatus] Capture complete - stopping status polling');
-        clearInterval(this.statusTimer);
-        this.statusTimer = null;
-        
-        // Also clear chart refresh timer
         if (this.chartRefreshTimer) {
           clearInterval(this.chartRefreshTimer);
           this.chartRefreshTimer = null;
         }
-      }
-    } catch (e) {
-      console.warn('Failed to poll online status:', e.message);
-    }
-  }
-
-  async requestMMTOfflineByPath(filePath, outputSessionId) {
-    const url = `${SERVER_URL}/api/mmt/offline`;
-    const response = await fetch(url, {
-      method: "POST",
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ filePath, outputSessionId })
-    });
-    const data = await response.json();
-    return data;
-  }
-
-  async processSlice(filePath) {
-    try {
-      const outputSessionId = this.state.status && this.state.status.outputSessionId ? this.state.status.outputSessionId : null;
-      await this.requestMMTOfflineByPath(filePath, outputSessionId);
-      const groupedReportId = outputSessionId ? `report-${outputSessionId}` : null;
-      let csvList = [];
-      for (let i = 0; i < 10; i++) {
-        const res = await fetch(`${SERVER_URL}/api/reports/${groupedReportId || ''}`);
-        const data = await res.json();
-        csvList = (data && data.csvFiles) ? data.csvFiles : [];
-        if (Array.isArray(csvList) && csvList.length > 0) break;
-        await new Promise(r => setTimeout(r, 1000));
-      }
-      if (!Array.isArray(csvList) || csvList.length === 0) {
-        console.error('No CSV reports found for', groupedReportId || 'latest');
-        this.setState({ isProcessingSlice: false });
         return;
       }
-      const sortedCsv = [...csvList].sort();
-      const nextCsv = sortedCsv.find(name => this.state.processedCsvs.indexOf(name) === -1);
-      if (!nextCsv) {
-        this.setState({ isProcessingSlice: false });
+
+      const { currentPredictionId } = this.state;
+      if (!currentPredictionId) {
         return;
       }
-      this.props.fetchPredict(this.state.modelId, groupedReportId, nextCsv);
-      this.setState(prev => ({ processedCsvs: [...prev.processedCsvs, nextCsv] }));
-      
-      // Don't use predictTimer in online mode - we have manual polling loop below
-      // predictTimer is only needed for offline mode where Redux handles the prediction status
-      
-      for (let i = 0; i < 20; i++) {
-        try {
-          const st = await apiRequestPredictStatus();
-          if (st && !st.isRunning && st.lastPredictedId) {
-            await this.appendAttackRowsFromPredictionId(st.lastPredictedId);
-            break;
+
+      // Fetch prediction results using authenticated API
+      const predictStats = await requestPredictStats(currentPredictionId);
+
+      if (predictStats) {
+        const rows = predictStats.trim().split('\n').filter(r => r.trim().length > 0);
+        // stats.csv format: no header, just data rows (normal_count,attack_count,total_count)
+        if (rows.length > 0) {
+          const lastRow = rows[rows.length - 1]; // Get the latest stats
+          const cols = lastRow.split(',');
+          if (cols.length >= 2) {
+            const normal = parseInt(cols[0]) || 0;
+            const malicious = parseInt(cols[1]) || 0;
+
+            this.setState({
+              aggregateNormal: normal,
+              aggregateMalicious: malicious,
+              predictStats,
+              hasResultsShown: true
+            });
           }
-        } catch (_) {}
-        await new Promise(r => setTimeout(r, 1500));
+        }
       }
+
+      // Fetch attack details using authenticated API
+      const attackCsv = await requestPredictionAttack(currentPredictionId);
+      if (attackCsv && attackCsv.trim().length > 0) {
+        // Build attack table
+        const { rows: attackRows, flowColumns: attackFlowColumns, mitigationColumns } = buildAttackTable({
+          csvString: attackCsv,
+          onAction: (key, record) => this.onMitigationAction(key, record),
+          buildMenu: (record, onAction) => {
+            const { srcIp, dstIp, dport } = this.computeFlowDetails(record);
+            const validSrc = this.isValidIPv4(srcIp);
+            const validDst = this.isValidIPv4(dstIp);
+            const validPort = this.isValidPort(dport);
+            const { userRole } = this.props;
+            const assistantDisabled = !userRole?.isSignedIn || userRole?.tokenLimitReached;
+            return (
+              <Menu onClick={({ key }) => onAction && onAction(key, record)}>
+                <Menu.Item key="explain-gpt" disabled={assistantDisabled}>
+                  Ask Assistant
+                  {assistantDisabled && <LockOutlined style={{ marginLeft: 8, fontSize: '11px', color: '#ff4d4f' }} />}
+                </Menu.Item>
+                <Menu.Item key="explain-shap" disabled>Explain (XAI SHAP)</Menu.Item>
+                <Menu.Item key="explain-lime" disabled>Explain (XAI LIME)</Menu.Item>
+                <Menu.Divider />
+                <Menu.Item key="block-src-ip" disabled={!validSrc}>{`Block source IP${validSrc ? ` ${srcIp}` : ''}`}</Menu.Item>
+                <Menu.Item key="block-dst-ip" disabled={!validDst}>{`Block destination IP${validDst ? ` ${dstIp}` : ''}`}</Menu.Item>
+                {validPort && (
+                  <>
+                    <Menu.Divider />
+                    <Menu.Item key="block-dst-port">{`Block destination port ${dport}/tcp`}</Menu.Item>
+                  </>
+                )}
+                <Menu.Divider />
+                <Menu.Item key="drop-session" disabled={!(validSrc || validDst)}>{`Drop session${validSrc ? ` ${srcIp}` : validDst ? ` ${dstIp}` : ''}`}</Menu.Item>
+                <Menu.Divider />
+                <Menu.Item key="send-nats" disabled={!userRole?.isAdmin}>
+                  Send flow to NATS
+                  {!userRole?.isAdmin && <LockOutlined style={{ marginLeft: 8, fontSize: '11px', color: '#ff4d4f' }} />}
+                </Menu.Item>
+              </Menu>
+            );
+          }
+        });
+        
+        this.setState({ 
+          attackCsv, 
+          attackRows, 
+          attackFlowColumns, 
+          mitigationColumns,
+          hasResultsShown: true 
+        });
+      }
+
     } catch (e) {
-      console.error('processSlice error:', e);
-    } finally {
-      this.setState({ isProcessingSlice: false });
+      console.warn('Failed to poll online results:', e.message);
     }
   }
 
+  /**
+   * Start online prediction using integrated MMT-probe approach
+   */
   async handleButtonStart() {
-    const { modelId, interface: iface, windowSec, totalDurationSec } = this.state;
-    
-    // Security check: Prevent online predictions for non-admin users
+    const { modelId, interface: iface } = this.state;
+
+    // Security check
     if (!this.props.canPerformOnlineActions) {
-      message.error('Administrator privileges required for online predictions');
+      notification.error({ message: 'Access Denied', description: 'Administrator privileges required for online predictions', placement: 'topRight' });
       this.setState({ mode: 'offline' });
       return;
     }
-    
-    if (!modelId || !iface) return;
+
+    if (!modelId) {
+      notification.warning({ message: 'Missing Selection', description: 'Please select a model first', placement: 'topRight' });
+      return;
+    }
+
+    if (!iface) {
+      notification.warning({ message: 'Missing Selection', description: 'Please select a network interface', placement: 'topRight' });
+      return;
+    }
+
     try {
-      const payload = { iface, windowSec };
-      if (totalDurationSec !== null && totalDurationSec !== undefined) {
-        payload.totalDurationSec = totalDurationSec;
+      // Start integrated online prediction
+      const result = await requestPredictOnlineStart(modelId, iface);
+
+      if (result.success) {
+        notification.success({ message: 'Started', description: `Online prediction started on ${iface}`, placement: 'topRight' });
+        this.setState({
+          isRunningOnline: true,
+          currentPredictionId: result.predictionId,
+          aggregateNormal: 0,
+          aggregateMalicious: 0,
+          attackCsv: null,
+          attackRows: [],
+          attackFlowColumns: [],
+          mitigationColumns: [],
+        });
+
+        // Start polling for results (every 10 seconds to reduce server load)
+        if (this.statusTimer) clearInterval(this.statusTimer);
+        this.statusTimer = setInterval(this.pollOnlineResults, 10000);
+
+        // Chart refresh timer
+        if (this.chartRefreshTimer) clearInterval(this.chartRefreshTimer);
+        this.chartRefreshTimer = setInterval(() => this.forceUpdate(), 10000);
+      } else {
+        notification.error({ message: 'Start Failed', description: result.message || 'Failed to start online prediction', placement: 'topRight' });
       }
-      const res = await fetch(`${SERVER_URL}/api/online/start`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      if (!res.ok) throw new Error(await res.text());
-      const data = await res.json();
-      message.success(`Started capture on ${iface} (pid ${data.pid})`);
-      this.setState({ isCapturing: true, status: data, sessionDir: data.sessionDir, lastProcessedFile: null, processedFiles: [], processedCsvs: [], predictStats: null, aggregateNormal: 0, aggregateMalicious: 0, lastSliceStats: null, attackCsv: null, attackRows: [], attackFlowColumns: [], mitigationColumns: [], hasResultsShown: false, lastShownPredictionId: null });
-      if (this.statusTimer) clearInterval(this.statusTimer);
-      this.statusTimer = setInterval(this.pollStatus, 2000);
-      
-      // Start chart refresh timer for online mode (force re-render every 5 seconds)
-      if (this.chartRefreshTimer) clearInterval(this.chartRefreshTimer);
-      this.chartRefreshTimer = setInterval(() => {
-        // Force component update to refresh charts
-        this.forceUpdate();
-      }, 5000);
     } catch (e) {
-      message.error(`Failed to start capture: ${e.message}`);
+      console.error('Error starting online prediction:', e);
+      notification.error({ message: 'Start Failed', description: `Failed to start: ${e.message}`, placement: 'topRight' });
     }
   }
 
+  /**
+   * Stop online prediction
+   */
   async handleButtonStop() {
+    // Do one final fetch before stopping to get latest results
+    await this.pollOnlineResults();
+
+    // Immediately stop polling by setting state to false
+    this.setState({ isRunningOnline: false });
+
+    // Clear timers immediately
+    if (this.statusTimer) {
+      clearInterval(this.statusTimer);
+      this.statusTimer = null;
+    }
+    if (this.chartRefreshTimer) {
+      clearInterval(this.chartRefreshTimer);
+      this.chartRefreshTimer = null;
+    }
+
     try {
-      const res = await fetch(`${SERVER_URL}/api/online/stop`, { method: 'POST' });
-      const data = await res.json();
-      
-      // Stop all timers immediately
-      if (this.predictTimer) {
-        clearInterval(this.predictTimer);
-        this.predictTimer = null;
+      const result = await requestPredictOnlineStop();
+
+      if (result.success) {
+        notification.success({ message: 'Stopped', description: 'Online prediction stopped. Final results displayed.', placement: 'topRight' });
+      } else {
+        notification.error({ message: 'Stop Failed', description: result.message || 'Failed to stop online prediction', placement: 'topRight' });
+        // If failed, restore the running state
+        this.setState({ isRunningOnline: true });
       }
-      if (this.intervalId) {
-        clearInterval(this.intervalId);
-        this.intervalId = null;
-      }
-      if (this.chartRefreshTimer) {
-        clearInterval(this.chartRefreshTimer);
-        this.chartRefreshTimer = null;
-      }
-      
-      this.setState({ 
-        isCapturing: false, 
-        isRunning: false,
-        status: { ...(this.state.status || {}), running: false }, 
-        hasResultsShown: true 
-      });
-      
-      // Keep status timer only to finish remaining files, then it will auto-stop
-      if (!this.statusTimer) {
-        this.statusTimer = setInterval(this.pollStatus, 2000);
-      }
-      this.pollStatus();
-      message.success('Stopped capture. Processing remaining files...');
     } catch (e) {
-      message.error(`Failed to stop capture: ${e.message}`);
+      console.error('Error stopping online prediction:', e);
+      notification.error({ message: 'Stop Failed', description: `Failed to stop: ${e.message}`, placement: 'topRight' });
+      // If error, restore the running state
+      this.setState({ isRunningOnline: true });
     }
   }
 
@@ -1197,19 +1114,14 @@ class PredictPage extends Component {
   }
 
   render() {
-    const { app, models, reports } = this.props;
-    const { mode, modelId, isRunning, predictStats, isCapturing, aggregateNormal, aggregateMalicious, lastSliceStats } = this.state;
-
-    const reportsOptions = reports ? reports.map(report => ({
-      value: report,
-      label: report,
-    })) : [];
+    const { app, models } = this.props;
+    const { mode, modelId, isRunning, predictStats, isRunningOnline, aggregateNormal, aggregateMalicious } = this.state;
 
     const modelsOptions = getFilteredModelsOptions(app, models);
 
     const subTitle = 'Offline and online prediction using models';
 
-    let tableConfig, maliciousFlows, predictOutput;
+    let maliciousFlows, predictOutput;
     let normalFlows = 0;
     let totalFlows = 0;
     
@@ -1218,28 +1130,8 @@ class PredictPage extends Component {
       normalFlows = aggregateNormal;
       maliciousFlows = aggregateMalicious;
       totalFlows = normalFlows + maliciousFlows;
-      const dataSource = [{ key: 'agg', "Normal flows": String(normalFlows), "Malicious flows": String(maliciousFlows), "Total flows": String(totalFlows) }];
-      const columns = [
-        { title: 'Normal flows', dataIndex: 'Normal flows', align: 'center' },
-        { title: 'Malicious flows', dataIndex: 'Malicious flows', align: 'center' },
-        { title: 'Total flows', dataIndex: 'Total flows', align: 'center' },
-      ];
-      tableConfig = { dataSource, columns, pagination: false };
-    } else if (mode === 'online' && lastSliceStats) {
-      const values = lastSliceStats.trim().split('\n')[1].split(',');
-      const n = parseInt(values[0], 10) || 0;
-      const m = parseInt(values[1], 10) || 0;
-      normalFlows = n; maliciousFlows = m; totalFlows = n + m;
-      const dataSource = [{ key: 'last', "Normal flows": values[0], "Malicious flows": values[1], "Total flows": values[2] }];
-      const columns = [
-        { title: 'Normal flows', dataIndex: 'Normal flows', align: 'center' },
-        { title: 'Malicious flows', dataIndex: 'Malicious flows', align: 'center' },
-        { title: 'Total flows', dataIndex: 'Total flows', align: 'center' },
-      ];
-      tableConfig = { dataSource, columns, pagination: false };
     } else if (mode === 'offline' && predictStats) {
       const predictResult = this.handleTablePredictStats(predictStats);
-      tableConfig = predictResult.tableConfig;
       maliciousFlows = predictResult.maliciousFlows;
       normalFlows = predictResult.normalFlows;
       totalFlows = normalFlows + maliciousFlows;
@@ -1280,23 +1172,6 @@ class PredictPage extends Component {
     };
 
     const maliciousRate = totalFlows > 0 ? maliciousFlows / totalFlows : 0;
-    const ringConfig = {
-      height: 200,
-      width: 200,
-      autoFit: false,
-      percent: maliciousRate,
-      color: ['#F4664A', '#E8EDF3'],
-      statistic: {
-        title: {
-          formatter: () => 'Malicious',
-          style: { fontSize: 14 },
-        },
-        content: {
-          formatter: () => `${(maliciousRate * 100).toFixed(1)}%`,
-          style: { fontSize: 20 },
-        },
-      },
-    };
 
     const onSyncPaginate = (pagination) => {
       this.setState({ attackPagination: { current: pagination.current, pageSize: pagination.pageSize } });
@@ -1408,21 +1283,20 @@ class PredictPage extends Component {
                 onChange={(value) => {
                   // Prevent switching to online if user doesn't have permission
                   if (value === 'online' && !this.props.canPerformOnlineActions) {
-                    message.warning('Administrator privileges required for online predictions');
+                    notification.warning({ message: 'Access Denied', description: 'Administrator privileges required for online predictions', placement: 'topRight' });
                     return;
                   }
-                  this.setState({ 
+                  this.setState({
                     mode: value,
                     predictStats: null,
                     attackRows: [],
                     aggregateNormal: 0,
                     aggregateMalicious: 0,
-                    lastSliceStats: null,
                     hasResultsShown: false,
                   });
                 }}
                 style={{ width: 200 }}
-                disabled={isRunning || isCapturing}
+                disabled={isRunning || isRunningOnline}
               >
                 <Select.Option value="offline">Offline (PCAP)</Select.Option>
                 <Select.Option value="online" disabled={!this.props.canPerformOnlineActions}>
@@ -1617,7 +1491,7 @@ class PredictPage extends Component {
                   style={{ width: '100%', maxWidth: 500 }}
                   allowClear showSearch
                   value={this.state.modelId}
-                  disabled={isModelIdPresent || isCapturing}
+                  disabled={isModelIdPresent || isRunningOnline}
                   onChange={(value) => {
                     this.setState({ modelId: value });
                     console.log(`Select model ${value}`);
@@ -1635,48 +1509,14 @@ class PredictPage extends Component {
                 <Select placeholder="Select a network interface ..."
                   style={{ width: '100%', maxWidth: 500 }}
                   allowClear showSearch
-                  disabled={isCapturing}
+                  disabled={isRunningOnline}
                   value={this.state.interface}
                   onChange={v => this.setState({ interface: v })}
                   options={this.state.interfacesOptions}
                 />
               </Col>
             </Row>
-            
-            <Row gutter={16} align="middle" style={{ marginBottom: 16 }}>
-              <Col span={6} style={{ textAlign: 'right', paddingRight: 16 }}>
-                <strong>Window (s):</strong>
-              </Col>
-              <Col span={18}>
-                <InputNumber 
-                  min={3} 
-                  max={60} 
-                  disabled={isCapturing}
-                  value={this.state.windowSec} 
-                  defaultValue={10} 
-                  onChange={(v) => this.setState({ windowSec: v || 10 })}
-                  style={{ width: 100 }}
-                />
-              </Col>
-            </Row>
-            
-            <Row gutter={16} align="middle" style={{ marginBottom: 16 }}>
-              <Col span={6} style={{ textAlign: 'right', paddingRight: 16 }}>
-                <strong>Duration (s):</strong>
-              </Col>
-              <Col span={18}>
-                <InputNumber
-                  min={this.state.windowSec}
-                  max={3600}
-                  disabled={isCapturing}
-                  value={this.state.totalDurationSec}
-                  placeholder="Until Stop"
-                  onChange={(v) => this.setState({ totalDurationSec: (v === undefined || v === null) ? null : v })}
-                  style={{ width: 150 }}
-                />
-              </Col>
-            </Row>
-            
+
             <Row gutter={16} align="middle" style={{ marginTop: 24 }}>
               <Col span={6}></Col>
               <Col span={18}>
@@ -1685,14 +1525,14 @@ class PredictPage extends Component {
                     type="primary"
                     icon={<PlayCircleOutlined />}
                     onClick={this.handleButtonStart}
-                    disabled={ isCapturing || !this.state.modelId || !this.state.interface }
+                    disabled={ isRunningOnline || !this.state.modelId || !this.state.interface }
                   >
                     Start
                   </Button>
                   <Button
                     icon={<StopOutlined />}
                     onClick={this.handleButtonStop}
-                    disabled={!isCapturing}
+                    disabled={!isRunningOnline}
                   >
                     Stop
                   </Button>
@@ -1707,7 +1547,7 @@ class PredictPage extends Component {
           <h2 style={{ fontSize: '20px' }}>Prediction Results</h2>
         </Divider>
         
-        { ((mode === 'offline' && predictStats && modelId && this.state.testingPcapFile) || (mode === 'online' && (this.state.hasResultsShown || aggregateNormal > 0 || aggregateMalicious > 0 || lastSliceStats || (this.state.attackRows && this.state.attackRows.length > 0)))) ? (
+        { ((mode === 'offline' && predictStats && modelId && this.state.testingPcapFile) || (mode === 'online' && (this.state.hasResultsShown || aggregateNormal > 0 || aggregateMalicious > 0 || (this.state.attackRows && this.state.attackRows.length > 0)))) ? (
           <>
             {/* Flow Statistics - DPI Style */}
             <Card style={{ marginBottom: 24 }}>
@@ -1720,7 +1560,7 @@ class PredictPage extends Component {
                     <Statistic
                       title={mode === 'offline' ? 'PCAP File' : 'Interface'}
                       value={mode === 'offline' ? (this.state.testingPcapFile || 'N/A') : (this.state.interface || 'N/A')}
-                      valueStyle={{ fontSize: 11, fontWeight: 'bold', color: '#722ed1', wordBreak: 'break-word', whiteSpace: 'normal', lineHeight: '1.3' }}
+                      valueStyle={{ fontSize: mode === 'online' ? 20 : 11, fontWeight: 'bold', color: '#722ed1', wordBreak: 'break-word', whiteSpace: 'normal', lineHeight: '1.3' }}
                       prefix={<FileTextOutlined style={{ color: '#722ed1', fontSize: '14px' }} />}
                     />
                   </Card>
@@ -1920,7 +1760,6 @@ const mapDispatchToProps = (dispatch) => ({
   fetchApp: () => dispatch(requestApp()),
   fetchAllModels: () => dispatch(requestAllModels()),
   fetchBuildConfigModel: (modelId) => dispatch(requestBuildConfigModel(modelId)),
-  fetchMMTStatus: () => dispatch(requestMMTStatus()),
   fetchAllReports: () => dispatch(requestAllReports()),
   fetchPredict: (modelId, reportId, reportFileName) =>
     dispatch(requestPredict({modelId, reportId, reportFileName})),

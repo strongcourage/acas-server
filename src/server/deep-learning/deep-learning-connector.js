@@ -310,13 +310,13 @@ const executePrediction = (csvPath, modelPath, predictionPath, logPath, onComple
     // Skip if no flow data (< 3 lines = header/metadata only)
     if (dataLines.length < 3) {
       const fileName = path.basename(csvPath);
-      console.log(`⏭️  Skipping CSV with no flow data (${dataLines.length} lines, ${fileSizeKB.toFixed(2)} KB): ${fileName}`);
+      console.log(`⏭️  Skipping CSV with no flow data (${dataLines.length} data lines, ${fileSizeKB.toFixed(2)} KB): ${fileName}`);
       if (onComplete) onComplete(0); // Call completion with success code
       return false;
     }
     
     const fileName = path.basename(csvPath);
-    console.log(`🔍 Running prediction: ${fileName} (${dataLines.length} flows, ${fileSizeKB.toFixed(2)} KB)`);
+    console.log(`🔍 Running prediction: ${fileName} (${dataLines.length} data lines, ${fileSizeKB.toFixed(2)} KB)`);
     
     spawnCommand(
       PYTHON_CMD,
@@ -529,6 +529,17 @@ const startPredicting = async (predictConfig, callback) => {
             // isOnlineMode: true,
             // startedAt: Date.now(),
             console.log(mmtStatus);
+
+            // Check for MMT errors (e.g., sudo access issues)
+            if (mmtStatus && mmtStatus.error) {
+              console.error('[Online Prediction] MMT failed to start:', mmtStatus.error);
+              callback({
+                error: mmtStatus.error,
+                details: mmtStatus.details || 'MMT-probe failed to start for online capture'
+              });
+              return;
+            }
+
             if (mmtStatus && mmtStatus.isRunning) {
               // MMT has been started, start processing the report
               // Create session in session manager
@@ -552,6 +563,12 @@ const startPredicting = async (predictConfig, callback) => {
               });
 
               startOnlinePrediction(csvRootPath, modelPath, predictionPath, logFile, 0);
+            } else {
+              // MMT didn't start and no explicit error - generic failure
+              callback({
+                error: 'MMT-probe failed to start for online capture',
+                details: 'Unknown error - check server logs'
+              });
             }
           });
           break;

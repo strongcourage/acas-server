@@ -66,17 +66,8 @@
     "name" : "predictions",
     "description" : "API relates to the prediction process"
   }, {
-    "name" : "online",
-    "description" : "API relates to online packet capture with tcpdump"
-  }, {
     "name" : "xai",
     "description" : "API relates to XAI"
-  }, {
-    "name" : "assistant",
-    "description" : "AI assistant for explaining flows and XAI results"
-  }, {
-    "name" : "queue",
-    "description" : "Job queue management for long-running tasks"
   } ],
   "paths" : {
     "/mmt/" : {
@@ -1430,58 +1421,6 @@
             }
           }
         }
-      },
-      "post" : {
-        "tags" : [ "predictions" ],
-        "summary" : "Start predicting",
-        "description" : "Request predicting for an input traffic",
-        "operationId" : "requestPredicting",
-        "requestBody" : {
-          "content" : {
-            "application/json" : {
-              "schema" : {
-                "$ref" : "#/components/schemas/predictConfig"
-              }
-            }
-          },
-          "required" : true
-        },
-        "responses" : {
-          "200" : {
-            "description" : "Successful operation",
-            "content" : {
-              "application/json" : {
-                "schema" : {
-                  "$ref" : "#/components/schemas/predictingStatus"
-                }
-              }
-            }
-          },
-          "500" : {
-            "description" : "Failed to process a prediction"
-          }
-        }
-      }
-    },
-    "/predict/stop" : {
-      "get" : {
-        "tags" : [ "predictions" ],
-        "summary" : "Stop the current prediction process",
-        "description" : "Stop the current online prediction process",
-        "operationId" : "stopOnlinePrediction",
-        "parameters" : [ ],
-        "responses" : {
-          "200" : {
-            "description" : "Successful operation",
-            "content" : {
-              "application/json" : {
-                "schema" : {
-                  "$ref" : "#/components/schemas/predictingStatus"
-                }
-              }
-            }
-          }
-        }
       }
     },
     "/predict/interfaces" : {
@@ -1517,30 +1456,59 @@
     "/predict/offline" : {
       "post" : {
         "tags" : [ "predictions" ],
-        "summary" : "Queue-based offline prediction",
-        "description" : "Start offline prediction using job queue for non-blocking execution",
+        "summary" : "Simplified offline prediction",
+        "description" : "Start offline prediction on a PCAP file.",
         "operationId" : "predictOffline",
         "requestBody" : {
           "content" : {
             "application/json" : {
               "schema" : {
                 "type" : "object",
+                "required" : ["modelId"],
                 "properties" : {
                   "modelId" : {
                     "type" : "string",
+                    "description" : "ID of the trained model to use for prediction",
                     "example" : "model_2"
+                  },
+                  "pcapFile" : {
+                    "type" : "string",
+                    "description" : "Name of the uploaded PCAP file (simplified mode). Server handles MMT analysis automatically.",
+                    "example" : "infiltration.pcap"
                   },
                   "reportId" : {
                     "type" : "string",
+                    "description" : "(Legacy) Report ID from previous MMT analysis",
                     "example" : "report-infiltration.pcap-0676753b-59ad-48d2-a491-ded2eeb80473"
                   },
                   "reportFileName" : {
                     "type" : "string",
+                    "description" : "(Legacy) CSV filename within the report",
                     "example" : "1768309962.560843_0_infiltration.pcap.csv"
                   },
                   "useQueue" : {
                     "type" : "boolean",
-                    "example" : false
+                    "description" : "Use job queue for non-blocking execution (default: true)",
+                    "example" : true
+                  }
+                }
+              },
+              "examples" : {
+                "simplified" : {
+                  "summary" : "Simplified mode (recommended)",
+                  "value" : {
+                    "modelId" : "model_2",
+                    "pcapFile" : "infiltration.pcap",
+                    "useQueue" : true
+                  }
+                },
+                "legacy" : {
+                  "summary" : "Legacy mode (backward compatible)",
+                  "value" : {
+                    "modelId" : "model_2",
+                    "reportId" : "report-infiltration.pcap-0676753b-59ad-48d2-a491-ded2eeb80473",
+                    "reportFileName" : "1768309962.560843_0_infiltration.pcap.csv",
+                    "useQueue" : true
                   }
                 }
               }
@@ -1560,15 +1528,29 @@
                       "type" : "boolean"
                     },
                     "jobId" : {
-                      "type" : "string"
+                      "type" : "string",
+                      "description" : "Job ID for polling status (when useQueue=true)"
                     },
                     "predictionId" : {
+                      "type" : "string",
+                      "description" : "Prediction ID for retrieving results"
+                    },
+                    "queueName" : {
+                      "type" : "string"
+                    },
+                    "message" : {
                       "type" : "string"
                     }
                   }
                 }
               }
             }
+          },
+          "400" : {
+            "description" : "Missing required parameters or MMT analysis failed"
+          },
+          "500" : {
+            "description" : "Internal server error or MMT timeout"
           }
         }
       }
@@ -1595,6 +1577,125 @@
               "application/json" : {
                 "schema" : {
                   "$ref" : "#/components/schemas/jobStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/predict/online" : {
+      "post" : {
+        "tags" : [ "predictions" ],
+        "summary" : "Start integrated online prediction with MMT-probe",
+        "description" : "Start real-time AI-based intrusion detection on a network interface. This endpoint combines MMT-probe packet capture, DPI analysis, feature extraction, and AI prediction in one integrated pipeline.",
+        "operationId" : "startOnlinePrediction",
+        "requestBody" : {
+          "required" : true,
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "type" : "object",
+                "required" : ["modelId", "interface"],
+                "properties" : {
+                  "modelId" : {
+                    "type" : "string",
+                    "description" : "Model ID to use for prediction",
+                    "example" : "model_1"
+                  },
+                  "interface" : {
+                    "type" : "string",
+                    "description" : "Network interface to monitor (e.g., eth0, lo)",
+                    "example" : "eth0"
+                  }
+                }
+              },
+              "example" : {
+                "modelId" : "model_1",
+                "interface" : "eth0"
+              }
+            }
+          }
+        },
+        "responses" : {
+          "200" : {
+            "description" : "Online prediction started successfully",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "type" : "object",
+                  "properties" : {
+                    "success" : {"type" : "boolean"},
+                    "mode" : {"type" : "string", "example" : "online"},
+                    "interface" : {"type" : "string"},
+                    "modelId" : {"type" : "string"},
+                    "predictionId" : {"type" : "string"},
+                    "isRunning" : {"type" : "boolean"},
+                    "startedAt" : {"type" : "number"},
+                    "message" : {"type" : "string"}
+                  }
+                }
+              }
+            }
+          },
+          "400" : {
+            "description" : "Missing required parameters"
+          },
+          "500" : {
+            "description" : "Failed to start online prediction"
+          }
+        }
+      }
+    },
+    "/predict/online/status" : {
+      "get" : {
+        "tags" : [ "predictions" ],
+        "summary" : "Get online prediction status",
+        "description" : "Get the current status of online prediction",
+        "operationId" : "getOnlinePredictionStatus",
+        "responses" : {
+          "200" : {
+            "description" : "Successful operation",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "type" : "object",
+                  "properties" : {
+                    "success" : {"type" : "boolean"},
+                    "mode" : {"type" : "string"},
+                    "isRunning" : {"type" : "boolean"},
+                    "predictionId" : {"type" : "string"},
+                    "interface" : {"type" : "string"},
+                    "modelId" : {"type" : "string"},
+                    "startedAt" : {"type" : "number"}
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/predict/online/stop" : {
+      "post" : {
+        "tags" : [ "predictions" ],
+        "summary" : "Stop online prediction",
+        "description" : "Stop the running online prediction and MMT-probe",
+        "operationId" : "stopOnlinePrediction",
+        "responses" : {
+          "200" : {
+            "description" : "Online prediction stopped successfully",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "type" : "object",
+                  "properties" : {
+                    "success" : {"type" : "boolean"},
+                    "message" : {"type" : "string"},
+                    "isRunning" : {"type" : "boolean"},
+                    "predictionId" : {"type" : "string"},
+                    "stoppedAt" : {"type" : "number"}
+                  }
                 }
               }
             }
@@ -2581,227 +2682,6 @@
         }
       }
     },
-    "/online/status" : {
-      "get" : {
-        "tags" : [ "online" ],
-        "summary" : "Get online capture status",
-        "description" : "Get status of online packet capture",
-        "operationId" : "getOnlineStatus",
-        "responses" : {
-          "200" : {
-            "description" : "Successful operation",
-            "content" : {
-              "application/json" : {
-                "schema" : {
-                  "type" : "object",
-                  "properties" : {
-                    "running" : {"type" : "boolean"},
-                    "pid" : {"type" : "number"},
-                    "iface" : {"type" : "string"}
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/online/files" : {
-      "get" : {
-        "tags" : [ "online" ],
-        "summary" : "List captured files",
-        "description" : "Get list of captured PCAP files",
-        "operationId" : "getOnlineFiles",
-        "responses" : {
-          "200" : {
-            "description" : "Successful operation",
-            "content" : {
-              "application/json" : {
-                "schema" : {
-                  "type" : "object",
-                  "properties" : {
-                    "files" : {"type" : "array", "items" : {"type" : "string"}}
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/online/start" : {
-      "post" : {
-        "tags" : [ "online" ],
-        "summary" : "Start online packet capture",
-        "description" : "Start capturing packets with tcpdump. Uses BPF (Berkeley Packet Filter) syntax for filtering.",
-        "operationId" : "startOnlineCapture",
-        "requestBody" : {
-          "content" : {
-            "application/json" : {
-              "schema" : {
-                "type" : "object",
-                "required" : ["iface"],
-                "properties" : {
-                  "iface" : {
-                    "type" : "string",
-                    "description" : "Network interface to capture on (e.g., eth0, enp0s3)",
-                    "example" : "eth0"
-                  },
-                  "windowSec" : {
-                    "type" : "number",
-                    "description" : "Time window in seconds for rotating PCAP files",
-                    "default" : 10,
-                    "example" : 10
-                  },
-                  "totalDurationSec" : {
-                    "type" : "number",
-                    "description" : "Total capture duration in seconds (null for unlimited)",
-                    "example" : 60
-                  },
-                  "filter" : {
-                    "type" : "string",
-                    "description" : "BPF (Berkeley Packet Filter) expression to filter captured traffic. Examples: 'tcp port 80' (HTTP only), 'host 192.168.1.1' (specific host), 'tcp port 443 or tcp port 80' (HTTP/HTTPS), 'not port 22' (exclude SSH). Leave empty or omit to capture all traffic.",
-                    "example" : "tcp port 80 or tcp port 443"
-                  }
-                }
-              },
-              "example" : {
-                "iface" : "eth0",
-                "windowSec" : 10,
-                "totalDurationSec" : 60,
-                "filter" : "tcp port 80 or tcp port 443"
-              }
-            }
-          }
-        },
-        "responses" : {
-          "200" : {
-            "description" : "Capture started"
-          }
-        }
-      }
-    },
-    "/online/stop" : {
-      "post" : {
-        "tags" : [ "online" ],
-        "summary" : "Stop online packet capture",
-        "description" : "Stop the running packet capture",
-        "operationId" : "stopOnlineCapture",
-        "responses" : {
-          "200" : {
-            "description" : "Capture stopped"
-          }
-        }
-      }
-    },
-    "/assistant/" : {
-      "get" : {
-        "tags" : [ "assistant" ],
-        "summary" : "Get AI assistant status",
-        "description" : "Get AI assistant configuration and status",
-        "operationId" : "getAssistantStatus",
-        "responses" : {
-          "200" : {
-            "description" : "Successful operation",
-            "content" : {
-              "application/json" : {
-                "schema" : {
-                  "type" : "object",
-                  "properties" : {
-                    "ok" : {"type" : "boolean"},
-                    "provider" : {"type" : "string"},
-                    "model" : {"type" : "string"},
-                    "unlimited" : {"type" : "boolean"}
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/assistant/explain/flow" : {
-      "post" : {
-        "tags" : [ "assistant" ],
-        "summary" : "AI explanation of network flow",
-        "description" : "Get AI-powered explanation of a network flow",
-        "operationId" : "explainFlow",
-        "requestBody" : {
-          "content" : {
-            "application/json" : {
-              "schema" : {
-                "type" : "object",
-                "properties" : {
-                  "flowRecord" : {"type" : "object"},
-                  "modelId" : {"type" : "string"},
-                  "predictionId" : {"type" : "string"},
-                  "extra" : {"type" : "object"}
-                }
-              }
-            }
-          }
-        },
-        "responses" : {
-          "200" : {
-            "description" : "Explanation generated",
-            "content" : {
-              "application/json" : {
-                "schema" : {
-                  "type" : "object",
-                  "properties" : {
-                    "text" : {"type" : "string"},
-                    "provider" : {"type" : "string"},
-                    "model" : {"type" : "string"}
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/assistant/explain/xai" : {
-      "post" : {
-        "tags" : [ "assistant" ],
-        "summary" : "AI explanation of XAI results",
-        "description" : "Get AI-powered explanation of XAI results",
-        "operationId" : "explainXAI",
-        "requestBody" : {
-          "content" : {
-            "application/json" : {
-              "schema" : {
-                "type" : "object",
-                "properties" : {
-                  "method" : {"type" : "string"},
-                  "modelId" : {"type" : "string"},
-                  "label" : {"type" : "string"},
-                  "explanation" : {"type" : "array"},
-                  "context" : {"type" : "object"}
-                }
-              }
-            }
-          }
-        },
-        "responses" : {
-          "200" : {
-            "description" : "Explanation generated"
-          }
-        }
-      }
-    },
-    "/assistant/tokens" : {
-      "get" : {
-        "tags" : [ "assistant" ],
-        "summary" : "Get token usage statistics",
-        "description" : "Get AI assistant token usage stats",
-        "operationId" : "getTokenStats",
-        "responses" : {
-          "200" : {
-            "description" : "Token stats retrieved"
-          }
-        }
-      }
-    },
     "/features/extract" : {
       "post" : {
         "tags" : [ "features" ],
@@ -2849,71 +2729,6 @@
         "description" : "Get status of queued feature extraction job",
         "operationId" : "getFeatureJobStatus",
         "parameters" : [ {
-          "name" : "jobId",
-          "in" : "path",
-          "required" : true,
-          "schema" : {
-            "type" : "string"
-          }
-        } ],
-        "responses" : {
-          "200" : {
-            "description" : "Job status retrieved"
-          }
-        }
-      }
-    },
-    "/queue/stats" : {
-      "get" : {
-        "tags" : [ "queue" ],
-        "summary" : "Get queue statistics",
-        "description" : "Get statistics for all job queues",
-        "operationId" : "getQueueStats",
-        "responses" : {
-          "200" : {
-            "description" : "Queue stats retrieved",
-            "content" : {
-              "application/json" : {
-                "schema" : {
-                  "type" : "object",
-                  "properties" : {
-                    "success" : {"type" : "boolean"},
-                    "stats" : {"type" : "object"}
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/queue/health" : {
-      "get" : {
-        "tags" : [ "queue" ],
-        "summary" : "Queue health check",
-        "description" : "Check health status of queue system",
-        "operationId" : "getQueueHealth",
-        "responses" : {
-          "200" : {
-            "description" : "Health check complete"
-          }
-        }
-      }
-    },
-    "/queue/status/{queueName}/{jobId}" : {
-      "get" : {
-        "tags" : [ "queue" ],
-        "summary" : "Get job status",
-        "description" : "Get status of a queued job",
-        "operationId" : "getJobStatus",
-        "parameters" : [ {
-          "name" : "queueName",
-          "in" : "path",
-          "required" : true,
-          "schema" : {
-            "type" : "string"
-          }
-        }, {
           "name" : "jobId",
           "in" : "path",
           "required" : true,

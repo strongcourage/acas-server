@@ -168,10 +168,6 @@ router.get('/', (req, res) => {
     const userId = req.userId;
     const userUploadPath = path.join(PCAP_UPLOADS_PATH, userId);
 
-    console.log('[PCAP API] GET / - userId:', userId);
-    console.log('[PCAP API] GET / - userUploadPath:', userUploadPath);
-    console.log('[PCAP API] GET / - path exists:', fs.existsSync(userUploadPath));
-
     // Get sample files
     const sampleFiles = fs.existsSync(PCAP_SAMPLES_PATH)
       ? fs.readdirSync(PCAP_SAMPLES_PATH)
@@ -186,13 +182,7 @@ router.get('/', (req, res) => {
         .map(f => ({ name: f, type: 'user', path: `uploads/${userId}` }))
       : [];
 
-    // IMPORTANT: Put user files FIRST, then samples
-    console.log('[PCAP API] GET / - userFiles count:', userFiles.length);
-    console.log('[PCAP API] GET / - sampleFiles count:', sampleFiles.length);
-    if (userFiles.length > 0) {
-      console.log('[PCAP API] GET / - userFiles names:', userFiles.map(f => f.name));
-    }
-
+    // Put user files FIRST, then samples
     res.send({
       pcaps: [...userFiles, ...sampleFiles],
       samples: sampleFiles.map(f => f.name),

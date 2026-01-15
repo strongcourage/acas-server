@@ -77,7 +77,10 @@ const isFileExistSync = (filePath) => {
 // eslint-disable-next-line no-unused-vars
 const isFileExist = (filePath, callback) => fs.stat(filePath, (err, stats) => {
   if (err) {
-    console.error(err);
+    // Don't log ENOENT errors - file not existing is an expected case
+    if (err.code !== 'ENOENT') {
+      console.error(err);
+    }
     callback(false);
   } else {
     callback(true);

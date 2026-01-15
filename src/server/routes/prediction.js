@@ -23,16 +23,73 @@ router.get('/:predictionId/download', (req, res, next) => {
 });
 
 /**
- * Get a prediction result content
+ * Get a prediction result content (singular - returns CSV file)
  */
 router.get('/:predictionId/attack', (req, res, next) => {
   const { predictionId } = req.params;
+  const sessionManager = require('../utils/sessionManager');
+  const session = sessionManager.getSession('prediction', predictionId);
+  
+  // Disable caching for online predictions (files are continuously updated)
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+
+  // For online mode, allow reading files even while running (they're continuously updated)
+  // For offline mode, wait until completion
+  const isOnlineMode = session?.mode === 'online';
+  if (session && session.isRunning && !isOnlineMode) {
+    return res.status(202).send('Prediction is still in progress, attacks file not yet available');
+  }
+
   const predictionFilePath = `${PREDICTION_PATH}${predictionId}/attacks.csv`;
   isFileExist(predictionFilePath, (ret) => {
     if (!ret) {
-      res.status(401).send(`The prediction file for attack traffic of ${predictionId} does not exist`);
+      // Prediction completed but no attacks file (all flows were normal)
+      // Return empty CSV with just a header so client can parse it
+      res.setHeader('Content-Type', 'text/csv');
+      res.status(200).send(''); // Empty CSV = no attacks
     } else {
       res.sendFile(predictionFilePath);
+    }
+  });
+});
+
+/**
+ * Get attacks as JSON (plural - for backward compatibility)
+ * Returns 202 if prediction still running, 404 if not found
+ */
+router.get('/:predictionId/attacks', (req, res, next) => {
+  const { predictionId } = req.params;
+  const sessionManager = require('../utils/sessionManager');
+  const session = sessionManager.getSession('prediction', predictionId);
+
+  // If prediction is still running, return 202
+  if (session && session.isRunning) {
+    return res.status(202).json({
+      status: 'processing',
+      message: 'Prediction is still in progress, attacks file not yet available'
+    });
+  }
+
+  const predictionFilePath = `${PREDICTION_PATH}${predictionId}/attacks.csv`;
+  isFileExist(predictionFilePath, (ret) => {
+    if (!ret) {
+      // Prediction completed but no attacks file - return empty
+      return res.status(200).json({
+        attacks: null,
+        message: 'No attacks detected or file not generated'
+      });
+    } else {
+      readTextFile(predictionFilePath, (err, content) => {
+        if (err) {
+          return res.status(500).json({
+            error: 'Failed to read attacks file',
+            attacks: null
+          });
+        }
+        res.json({ attacks: content });
+      });
     }
   });
 });
@@ -72,11 +129,19 @@ router.get('/:predictionId/normal', (req, res, next) => {
 router.get('/:predictionId', (req, res, next) => {
   const { predictionId } = req.params;
   const sessionManager = require('../utils/sessionManager');
+  
+  // Disable caching for online predictions (stats.csv is continuously updated)
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
 
   // Check if prediction is still running
   const session = sessionManager.getSession('prediction', predictionId);
-
-  if (session && session.isRunning) {
+  
+  // For online mode, allow reading stats even while running (they're continuously updated)
+  // For offline mode, wait until completion
+  const isOnlineMode = session?.mode === 'online';
+  if (session && session.isRunning && !isOnlineMode) {
     return res.status(202).json({
       status: 'processing',
       message: 'Prediction is still in progress',
@@ -85,11 +150,14 @@ router.get('/:predictionId', (req, res, next) => {
     });
   }
 
-  readTextFile(`${PREDICTION_PATH}${predictionId}/stats.csv`, (err, prediction) => {
+  // Use fs.readFile directly to avoid logging ENOENT errors for online mode
+  const fs = require('fs');
+  const path = require('path');
+  const statsPath = path.join(PREDICTION_PATH, predictionId, 'stats.csv');
+  
+  fs.readFile(statsPath, 'utf8', (err, prediction) => {
     if (err) {
       // Check if the prediction directory exists
-      const fs = require('fs');
-      const path = require('path');
       const predictionDir = path.join(PREDICTION_PATH, predictionId);
 
       if (!fs.existsSync(predictionDir)) {
@@ -99,7 +167,16 @@ router.get('/:predictionId', (req, res, next) => {
         });
       }
 
-      // Directory exists but stats.csv doesn't - likely still processing or failed
+      // Directory exists but stats.csv doesn't
+      // For online mode, return empty stats (no predictions completed yet) - don't log error
+      // For offline mode, this is an error - log it
+      if (isOnlineMode) {
+        return res.send({ prediction: '0,0,0' }); // No flows yet
+      }
+      
+      // Log error for offline mode only
+      console.error(`[Prediction Stats] Error reading stats.csv for ${predictionId}:`, err.message);
+      
       if (session && !session.isRunning) {
         return res.status(500).json({
           error: 'Prediction failed',

@@ -57,18 +57,47 @@ def predict(csv_path, model_path, result_path):
     header = constants.AD_FEATURES_OUTPUT[:num_cols] if num_cols <= len(constants.AD_FEATURES_OUTPUT) else None
     last_column_index = num_cols - 1
     
-    dataFrame.to_csv(f"{result_path}/predictions.csv", index=False, header=header)
+    # Determine if files exist (for header writing)
+    predictions_exists = os.path.exists(f"{result_path}/predictions.csv")
+    attacks_exists = os.path.exists(f"{result_path}/attacks.csv")
+    normals_exists = os.path.exists(f"{result_path}/normals.csv")
+    stats_exists = os.path.exists(f"{result_path}/stats.csv")
+    
+    # Append to predictions.csv (write header only if file doesn't exist)
+    dataFrame.to_csv(f"{result_path}/predictions.csv", mode='a', index=False, header=header if not predictions_exists else False)
 
     attackDF = dataFrame[dataFrame[last_column_index] > 0]
     print("Number of attacks: " + str(len(attackDF.index)))
-    attackDF.to_csv(f"{result_path}/attacks.csv", index=False, header=header)
+    # Append to attacks.csv (write header only if file doesn't exist)
+    if len(attackDF.index) > 0:
+        attackDF.to_csv(f"{result_path}/attacks.csv", mode='a', index=False, header=header if not attacks_exists else False)
 
     normalDF = dataFrame[dataFrame[last_column_index] == 0]
     print("Number of normals: " + str(len(normalDF.index)))
-    normalDF.to_csv(f"{result_path}/normals.csv", index=False, header=header)
+    # Append to normals.csv (write header only if file doesn't exist)
+    if len(normalDF.index) > 0:
+        normalDF.to_csv(f"{result_path}/normals.csv", mode='a', index=False, header=header if not normals_exists else False)
 
-    statsArray =np.array([[len(normalDF.index), len(attackDF.index), len(dataFrame.index)]])
-    pd.DataFrame(statsArray).to_csv(f"{result_path}/stats.csv", index=False)
+    # For stats.csv, we want cumulative totals
+    # Read existing stats if present, otherwise start from zero
+    cumulative_normal = len(normalDF.index)
+    cumulative_attack = len(attackDF.index)
+    cumulative_total = len(dataFrame.index)
+    
+    if stats_exists:
+        try:
+            existing_stats = pd.read_csv(f"{result_path}/stats.csv", header=None)
+            if len(existing_stats) > 0:
+                last_row = existing_stats.iloc[-1]
+                cumulative_normal += int(last_row[0])
+                cumulative_attack += int(last_row[1])
+                cumulative_total += int(last_row[2])
+        except Exception as e:
+            print(f"Warning: Could not read existing stats: {e}")
+    
+    # Append cumulative stats
+    statsArray = np.array([[cumulative_normal, cumulative_attack, cumulative_total]])
+    pd.DataFrame(statsArray).to_csv(f"{result_path}/stats.csv", mode='a', index=False, header=False)
 
 if __name__ == "__main__":
     import sys
