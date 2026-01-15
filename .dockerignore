@@ -1,0 +1,80 @@
+# Python virtual environments
+venv/
+env/
+ENV/
+.venv/
+*.pyc
+__pycache__/
+*.pyo
+*.pyd
+
+# Node modules
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Docker
+.dockerignore
+Dockerfile*
+docker-compose*.yml
+
+# Documentation
+*.md
+!README.md
+
+# Test files
+test/
+tests/
+*.test.js
+*.spec.js
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+.travis.yml
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Build artifacts (will be generated inside container)
+build/
+dist/
+
+# Data directories (mounted as volumes)
+src/server/deep-learning/models/
+src/server/deep-learning/trainings/
+src/server/deep-learning/predictions/
+src/server/deep-learning/xai/
+src/server/deep-learning/attacks/
+src/server/mmt/outputs/
+src/server/mmt/pcaps/
+
+# Environment files (use .env in container)
+.env.local
+.env.*.local
+
+# Coverage reports
+coverage/
+.nyc_output/

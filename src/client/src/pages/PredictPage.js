@@ -1811,8 +1811,6 @@ const mapDispatchToProps = (dispatch) => ({
   fetchAllModels: () => dispatch(requestAllModels()),
   fetchBuildConfigModel: (modelId) => dispatch(requestBuildConfigModel(modelId)),
   fetchAllReports: () => dispatch(requestAllReports()),
-  fetchPredict: (modelId, reportId, reportFileName) =>
-    dispatch(requestPredict({modelId, reportId, reportFileName})),
   fetchPredictStatus: () => dispatch(requestPredictStatus()),
   fetchRunLime: (modelId, sampleId, numberFeatures) =>
     dispatch(requestRunLime({ modelId, sampleId, numberFeatures })),

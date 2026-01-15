@@ -689,42 +689,11 @@ export const requestPredictOnlineStop = async () => {
   return await response.json();
 };
 
-export const requestPredict = async (modelId, reportId, reportFileName, useQueue = true) => {
-  // NEW: Use queue-based endpoint by default
-  if (useQueue) {
-    return requestPredictOfflineQueued(modelId, reportId, reportFileName);
-  }
-
-  // OLD: Legacy endpoint for backward compatibility
-  const url = `${SERVER_URL}/api/predict`;
-
-  const predictConfig = {
-    modelId,
-    inputTraffic: {
-      type: "report",
-      value: {
-        reportId: reportId,
-        reportFileName: reportFileName,
-      }
-    },
-  };
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ predictConfig }),
-  });
-  console.log(predictConfig);
-  const data = await response.json();
-  console.log(`Prediction on server with config ${predictConfig}`);
-  return data;
-};
 
 /**
- * Simplified offline prediction - server handles MMT analysis automatically
+ * Offline prediction - server handles MMT analysis automatically
  * @param {string} modelId - Model ID to use for prediction
- * @param {string} pcapFile - PCAP filename (simplified mode)
+ * @param {string} pcapFile - PCAP filename
  * @param {boolean} useQueue - Use job queue (default: true)
  */
 export const requestPredictOfflineSimplified = async (modelId, pcapFile, useQueue = true) => {
@@ -746,28 +715,6 @@ export const requestPredictOfflineSimplified = async (modelId, pcapFile, useQueu
   return response.json();
 };
 
-/**
- * Legacy offline prediction - requires reportId and reportFileName
- * @deprecated Use requestPredictOfflineSimplified instead
- */
-export const requestPredictOfflineQueued = async (modelId, reportId, reportFileName) => {
-  const url = `${SERVER_URL}/api/predict/offline`;
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ modelId, reportId, reportFileName, useQueue: true })
-  });
-  if (!response.ok) {
-    const errorText = await response.text();
-    try {
-      const errorData = JSON.parse(errorText);
-      throw new Error(errorData.message || errorData.error || errorText);
-    } catch (e) {
-      throw new Error(errorText);
-    }
-  }
-  return response.json();
-};
 
 export const requestPredictJobStatus = async (jobId) => {
   const url = `${SERVER_URL}/api/predict/job/${jobId}`;

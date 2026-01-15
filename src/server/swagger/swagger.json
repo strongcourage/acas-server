@@ -1456,15 +1456,15 @@
     "/predict/offline" : {
       "post" : {
         "tags" : [ "predictions" ],
-        "summary" : "Simplified offline prediction",
-        "description" : "Start offline prediction on a PCAP file.",
+        "summary" : "Offline prediction with automatic MMT analysis",
+        "description" : "Start offline prediction on a PCAP file. Server automatically handles MMT analysis.",
         "operationId" : "predictOffline",
         "requestBody" : {
           "content" : {
             "application/json" : {
               "schema" : {
                 "type" : "object",
-                "required" : ["modelId"],
+                "required" : ["modelId", "pcapFile"],
                 "properties" : {
                   "modelId" : {
                     "type" : "string",
@@ -1473,18 +1473,8 @@
                   },
                   "pcapFile" : {
                     "type" : "string",
-                    "description" : "Name of the uploaded PCAP file (simplified mode). Server handles MMT analysis automatically.",
+                    "description" : "Name of the uploaded PCAP file. Server handles MMT analysis automatically.",
                     "example" : "infiltration.pcap"
-                  },
-                  "reportId" : {
-                    "type" : "string",
-                    "description" : "(Legacy) Report ID from previous MMT analysis",
-                    "example" : "report-infiltration.pcap-0676753b-59ad-48d2-a491-ded2eeb80473"
-                  },
-                  "reportFileName" : {
-                    "type" : "string",
-                    "description" : "(Legacy) CSV filename within the report",
-                    "example" : "1768309962.560843_0_infiltration.pcap.csv"
                   },
                   "useQueue" : {
                     "type" : "boolean",
@@ -1493,24 +1483,10 @@
                   }
                 }
               },
-              "examples" : {
-                "simplified" : {
-                  "summary" : "Simplified mode (recommended)",
-                  "value" : {
-                    "modelId" : "model_2",
-                    "pcapFile" : "infiltration.pcap",
-                    "useQueue" : true
-                  }
-                },
-                "legacy" : {
-                  "summary" : "Legacy mode (backward compatible)",
-                  "value" : {
-                    "modelId" : "model_2",
-                    "reportId" : "report-infiltration.pcap-0676753b-59ad-48d2-a491-ded2eeb80473",
-                    "reportFileName" : "1768309962.560843_0_infiltration.pcap.csv",
-                    "useQueue" : true
-                  }
-                }
+              "example" : {
+                "modelId" : "model_2",
+                "pcapFile" : "infiltration.pcap",
+                "useQueue" : true
               }
             }
           },

@@ -1,6 +1,8 @@
+version: '3.3'
+
 services:
   ndr_server:
-    container_name: resilmesh_sap_ndr_server
+    container_name: ndr_server
     image: mont/ndr-server
     restart: unless-stopped
     build:
@@ -9,7 +11,7 @@ services:
     ports:
       - "31057:31057"
     networks:
-      - resilmesh_network
+      - ndr_network
     env_file:
       - .env
     cap_add:
@@ -28,10 +30,9 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 60s
 
   ndr_client:
-    container_name: resilmesh_sap_ndr_client
+    container_name: ndr_client
     image: mont/ndr-client
     restart: unless-stopped
     build:
@@ -46,7 +47,7 @@ services:
     ports:
       - "3000:3000"
     networks:
-      - resilmesh_network
+      - ndr_network
     depends_on:
       - ndr_server
     healthcheck:
@@ -54,4 +55,3 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 30s
