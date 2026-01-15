@@ -51,8 +51,7 @@ services:
       - ./src/server/mmt/outputs:/ndr-app/src/server/mmt/outputs
       - ./src/server/mmt/pcaps:/ndr-app/src/server/mmt/pcaps
     depends_on:
-      valkey:
-        condition: service_healthy
+      - valkey
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:31057/health"]
       interval: 30s
