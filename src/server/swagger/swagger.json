@@ -2,14 +2,14 @@
   "openapi" : "3.0.2",
   "info" : {
     "title" : "Network Detection and Response (NDR)",
-    "description" : "The APIs provided by the NDR component",
-    "termsOfService" : "https://github.com/Montimage/maip",
+    "description" : "Advanced Cybersecurity Analytics Service (ACAS) for AI-based analysis with explainable intelligence of network events captured by the Montimage Monitoring Tools (MMT)",
+    "termsOfService" : "https://github.com/Montimage/acas",
     "contact" : {
       "email" : "developer@montimage.com"
     },
     "license" : {
       "name" : "Montimage",
-      "url" : "https://www.montimage.com"
+      "url" : "https://www.montimage.eu"
     },
     "version" : "v1"
   },
