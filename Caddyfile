@@ -3,7 +3,7 @@ ndr.montimage.eu {
     # Caddy will automatically obtain and renew SSL certificates
     
     # Reverse proxy to your React app
-    reverse_proxy resilmesh_sap_ndr_client:3000
+    reverse_proxy resilmesh-sap-ndr-client:3000
     
     # Enable compression
     encode gzip zstd
@@ -30,7 +30,7 @@ ndr.montimage.eu {
     
     # API proxy (if your backend is on a different port)
     handle /api/* {
-        reverse_proxy resilmesh_sap_ndr_server:31057
+        reverse_proxy resilmesh-sap-ndr-server:31057
     }
     
     # WebSocket support (if needed)
@@ -39,6 +39,6 @@ ndr.montimage.eu {
         header Upgrade websocket
     }
     handle @websockets {
-        reverse_proxy resilmesh_sap_ndr_client:3000
+        reverse_proxy resilmesh-sap-ndr-client:3000
     }
 }

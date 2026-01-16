@@ -1,6 +1,6 @@
 services:
-  resilmesh_sap_ndr_server:
-    container_name: resilmesh_sap_ndr_server
+  resilmesh-sap-ndr-server:
+    container_name: resilmesh-sap-ndr-server
     image: mont/ndr-server
     restart: unless-stopped
     build:
@@ -30,8 +30,8 @@ services:
       retries: 3
       start_period: 60s
 
-  resilmesh_sap_ndr_client:
-    container_name: resilmesh_sap_ndr_client
+  resilmesh-sap-ndr-client:
+    container_name: resilmesh-sap-ndr-client
     image: mont/ndr-client
     restart: unless-stopped
     build:
@@ -48,7 +48,7 @@ services:
     networks:
       - resilmesh_network
     depends_on:
-      - resilmesh_sap_ndr_server
+      - resilmesh-sap-ndr-server
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000"]
       interval: 30s
