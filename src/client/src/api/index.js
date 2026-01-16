@@ -695,14 +695,15 @@ export const requestPredictOnlineStop = async () => {
  * @param {string} modelId - Model ID to use for prediction
  * @param {string} pcapFile - PCAP filename
  * @param {boolean} useQueue - Use job queue (default: true)
+ * @param {object} userRole - User role object from useUserRole hook (for anonymous user identification)
  */
-export const requestPredictOfflineSimplified = async (modelId, pcapFile, useQueue = true) => {
+export const requestPredictOfflineSimplified = async (modelId, pcapFile, useQueue = true, userRole = null) => {
   const url = `${SERVER_URL}/api/predict/offline`;
-  const response = await fetch(url, {
+  const response = await fetchWithAuth(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ modelId, pcapFile, useQueue })
-  });
+  }, userRole);
   if (!response.ok) {
     const errorText = await response.text();
     try {
