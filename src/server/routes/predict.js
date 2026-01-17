@@ -150,11 +150,16 @@ router.get('/interfaces', (req, res) => {
  * POST /api/predict/offline
  * Simplified offline prediction - server handles MMT analysis automatically
  *
- * Body: { modelId: string, pcapFile: string, useQueue?: boolean }
+ * Body: {
+ *   modelId: string,
+ *   pcapFile: string,
+ *   useQueue?: boolean,
+ *   filterIPs?: string[]  // Optional: ISIM integration - only analyze traffic involving these IPs
+ * }
  */
 router.post('/offline', async (req, res) => {
   try {
-    const { modelId, pcapFile, useQueue } = req.body || {};
+    const { modelId, pcapFile, useQueue, filterIPs } = req.body || {};
     const userId = req.userId;
 
     if (!modelId) {
@@ -241,7 +246,8 @@ router.post('/offline', async (req, res) => {
           reportId: finalReportId,
           reportFileName: finalReportFileName,
           predictionId,
-          priority: 5
+          priority: 5,
+          filterIPs  // ISIM integration: optional IP filter
         });
         
         return res.json({
@@ -276,7 +282,8 @@ router.post('/offline', async (req, res) => {
       inputTraffic: {
         type: 'report',
         value: { reportId: finalReportId, reportFileName: finalReportFileName }
-      }
+      },
+      filterIPs  // ISIM integration: optional IP filter
     };
 
     startPredicting(predictConfig, (predictingStatus) => {
@@ -344,7 +351,7 @@ router.get('/job/:jobId', async (req, res) => {
  */
 router.post('/online', async (req, res) => {
   try {
-    const { modelId, interface: netInf } = req.body || {};
+    const { modelId, interface: netInf, filterIPs } = req.body || {};
 
     if (!modelId) {
       return res.status(400).json({
@@ -368,7 +375,8 @@ router.post('/online', async (req, res) => {
         value: {
           netInf
         }
-      }
+      },
+      filterIPs  // ISIM integration: optional IP filter for port mirroring mode
     };
 
     startPredicting(predictConfig, (predictingStatus) => {

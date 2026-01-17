@@ -434,15 +434,40 @@ def readAndExtractEvents(path):
 
     return ip_traffic, tcp_traffic, tls_traffic
 
-def eventsToFeatures(in_csv):
+def eventsToFeatures(in_csv, filter_ips=None):
     """
     Based on .csv mmt-probe report extracts the report attributes, and calculates ML features.
     :param in_csv: input .csv report file
+    :param filter_ips: optional list of IPs to filter. If provided, only flows involving these IPs will be processed.
     :return: ips, p1_features - Dataframe of calculated ML features per flow and direction and IPs matching the flows
     """
     logger.debug(f"Convert from events to features {in_csv}")
     ip_traffic, tcp_traffic, tls_traffic = readAndExtractEvents(in_csv)
     if not ip_traffic.empty:
+        # Apply IP filter if provided (ISIM integration)
+        if filter_ips and len(filter_ips) > 0:
+            filter_set = set(filter_ips)
+            original_count = len(ip_traffic)
+
+            # Keep rows where src OR dst is in filter list
+            ip_traffic = ip_traffic[
+                ip_traffic['ip.src'].isin(filter_set) |
+                ip_traffic['ip.dst'].isin(filter_set)
+            ]
+
+            # Also filter tcp_traffic and tls_traffic by session_id to keep consistency
+            if not ip_traffic.empty:
+                valid_sessions = ip_traffic['ip.session_id'].unique()
+                tcp_traffic = tcp_traffic[tcp_traffic['ip.session_id'].isin(valid_sessions)]
+                tls_traffic = tls_traffic[tls_traffic['ip.session_id'].isin(valid_sessions)]
+
+            filtered_count = len(ip_traffic)
+            logger.info(f"IP filter applied: {original_count} -> {filtered_count} flows (filter: {len(filter_set)} IPs)")
+
+        if ip_traffic.empty:
+            logger.warning("No traffic after IP filtering")
+            return {}, {}
+
         logger.debug("eventsToFeatures")
         ips, p1_features = calculateFeatures(ip_traffic, tcp_traffic, tls_traffic)
         p1_features = p1_features.fillna(0)

@@ -380,7 +380,7 @@ trainingQueue.process('train', CONCURRENCY.modelTraining, async (job) => {
  * Wraps existing prediction code from deep-learning/deep-learning-connector.js
  */
 predictionQueue.process('predict', CONCURRENCY.prediction, async (job) => {
-  const { modelId, reportId, reportFileName, predictionId } = job.data;
+  const { modelId, reportId, reportFileName, predictionId, filterIPs } = job.data;
   
   logInfo(`[Worker] Processing prediction job ${job.id} for model ${modelId}, prediction ${predictionId}`);
   
@@ -440,7 +440,14 @@ predictionQueue.process('predict', CONCURRENCY.prediction, async (job) => {
     const pythonCmd = process.env.PYTHON_CMD || 'python3';
     const predictionScript = path.join(__dirname, '../deep-learning/prediction.py');
     
-    const pythonProcess = spawn(pythonCmd, [predictionScript, csvPath, modelPath, predictionPath]);
+    // Build args - optionally include filterIPs as JSON for ISIM integration
+    const pythonArgs = [predictionScript, csvPath, modelPath, predictionPath];
+    if (filterIPs && Array.isArray(filterIPs) && filterIPs.length > 0) {
+      pythonArgs.push(JSON.stringify(filterIPs));
+      logInfo(`[Worker] Prediction job ${job.id} using IP filter: ${filterIPs.length} IPs`);
+    }
+
+    const pythonProcess = spawn(pythonCmd, pythonArgs);
     
     let stdout = '';
     let stderr = '';
@@ -475,18 +482,48 @@ predictionQueue.process('predict', CONCURRENCY.prediction, async (job) => {
     });
     
     await job.progress(100);
-    
+
     logInfo(`[Worker] Prediction completed for job ${job.id}, prediction ${predictionId}`);
-    
-    return {
+
+    // Read stats.csv to get prediction summary
+    const statsFile = path.join(predictionPath, 'stats.csv');
+    let stats = { normal: 0, attack: 0, total: 0 };
+    try {
+      if (fs.existsSync(statsFile)) {
+        const statsContent = fs.readFileSync(statsFile, 'utf8').trim();
+        const lastLine = statsContent.split('\n').pop();
+        const [normal, attack, total] = lastLine.split(',').map(Number);
+        stats = { normal: normal || 0, attack: attack || 0, total: total || 0 };
+      }
+    } catch (e) {
+      logInfo(`[Worker] Could not read stats file: ${e.message}`);
+    }
+
+    const result = {
       success: true,
       predictionId,
       modelId,
       predictionPath,
       resultsFile: path.join(predictionPath, 'predictions.csv'),
-      statsFile: path.join(predictionPath, 'stats.csv'),
-      message: 'Prediction completed successfully'
+      statsFile,
+      // Include prediction statistics in response
+      totalFlows: stats.total,
+      normalFlows: stats.normal,
+      attackFlows: stats.attack,
+      message: stats.total > 0
+        ? `Prediction completed: ${stats.total} flows analyzed, ${stats.attack} attacks detected`
+        : 'Prediction completed: No matching flows found (check filterIPs if specified)'
     };
+
+    // Add filter info if IPs were specified
+    if (filterIPs && Array.isArray(filterIPs) && filterIPs.length > 0) {
+      result.filterIPs = filterIPs;
+      if (stats.total === 0) {
+        result.warning = `No flows matched the specified filterIPs: ${filterIPs.join(', ')}`;
+      }
+    }
+
+    return result;
     
   } catch (error) {
     console.error(`[Worker] Prediction failed for job ${job.id}:`, error);

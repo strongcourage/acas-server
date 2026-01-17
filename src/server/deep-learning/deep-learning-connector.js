@@ -296,9 +296,10 @@ const stopOnlinePrediction = (callback) => {
  * @param {String} predictionPath - Output directory for predictions
  * @param {String} logPath - Log file path
  * @param {Function} onComplete - Callback when prediction completes (exitCode)
+ * @param {Array} filterIPs - Optional array of IPs to filter (ISIM integration)
  * @returns {Boolean} - True if prediction started, false if skipped
  */
-const executePrediction = (csvPath, modelPath, predictionPath, logPath, onComplete) => {
+const executePrediction = (csvPath, modelPath, predictionPath, logPath, onComplete, filterIPs = null) => {
   try {
     // Check if CSV has actual flow data
     const stats = fs.statSync(csvPath);
@@ -306,7 +307,7 @@ const executePrediction = (csvPath, modelPath, predictionPath, logPath, onComple
     const fileContent = fs.readFileSync(csvPath, 'utf8');
     const lines = fileContent.trim().split('\n');
     const dataLines = lines.filter(line => line.trim().length > 0 && !line.startsWith('#'));
-    
+
     // Skip if no flow data (< 3 lines = header/metadata only)
     if (dataLines.length < 3) {
       const fileName = path.basename(csvPath);
@@ -314,13 +315,20 @@ const executePrediction = (csvPath, modelPath, predictionPath, logPath, onComple
       if (onComplete) onComplete(0); // Call completion with success code
       return false;
     }
-    
+
     const fileName = path.basename(csvPath);
-    console.log(`🔍 Running prediction: ${fileName} (${dataLines.length} data lines, ${fileSizeKB.toFixed(2)} KB)`);
-    
+    const ipFilterMsg = filterIPs && filterIPs.length > 0 ? ` [filtering ${filterIPs.length} IPs]` : '';
+    console.log(`🔍 Running prediction: ${fileName} (${dataLines.length} data lines, ${fileSizeKB.toFixed(2)} KB)${ipFilterMsg}`);
+
+    // Build args - optionally include filterIPs as JSON for ISIM integration
+    const pythonArgs = [`${DEEP_LEARNING_PATH}/prediction.py`, csvPath, modelPath, predictionPath];
+    if (filterIPs && Array.isArray(filterIPs) && filterIPs.length > 0) {
+      pythonArgs.push(JSON.stringify(filterIPs));
+    }
+
     spawnCommand(
       PYTHON_CMD,
-      [`${DEEP_LEARNING_PATH}/prediction.py`, csvPath, modelPath, predictionPath],
+      pythonArgs,
       logPath,
       (error) => {
         // spawnCommand passes Error object on failure, null on success
@@ -354,70 +362,72 @@ const executePrediction = (csvPath, modelPath, predictionPath, logPath, onComple
  * @param {String} predictionPath Path to the location where the prediction output will be stored
  * @param {String} logPath Path to the log of what's going on with the prediction process
  * @param {Number} currentIndex The index of the report is going to be processed
+ * @param {Number} waitCount Internal counter for polling
+ * @param {Array} filterIPs Optional array of IPs to filter (ISIM integration)
  */
-const startOnlinePrediction = (reportPath, modelPath, predictionPath, logPath, currentIndex, waitCount = 0) => {
+const startOnlinePrediction = (reportPath, modelPath, predictionPath, logPath, currentIndex, waitCount = 0, filterIPs = null) => {
   if (!predictingStatus.isRunning) {
     console.log('The online prediction process has been terminated');
     return;
   }
-  
+
   // First call for this index
   if (waitCount === 0) {
     console.log(`startOnlinePrediction: ${currentIndex}`);
   }
-  
+
   let allCSVFiles = listFilesByTypeAsync(reportPath, '.csv');
   let currentReport = allCSVFiles[currentIndex];
-  
+
   // If CSV file doesn't exist yet, wait and retry
   if (!currentReport) {
     waitCount++;
     // Use setTimeout to avoid blocking the event loop (no logging during wait)
     setTimeout(() => {
-      startOnlinePrediction(reportPath, modelPath, predictionPath, logPath, currentIndex, waitCount);
+      startOnlinePrediction(reportPath, modelPath, predictionPath, logPath, currentIndex, waitCount, filterIPs);
     }, 1000);
     return;
   }
 
   // CSV exists, now check for .sem file
-  checkForSemFile(reportPath, modelPath, predictionPath, logPath, currentIndex, currentReport, 0);
+  checkForSemFile(reportPath, modelPath, predictionPath, logPath, currentIndex, currentReport, 0, filterIPs);
 };
 
-const checkForSemFile = (reportPath, modelPath, predictionPath, logPath, currentIndex, currentReport, semWaitCount) => {
+const checkForSemFile = (reportPath, modelPath, predictionPath, logPath, currentIndex, currentReport, semWaitCount, filterIPs = null) => {
   if (!predictingStatus.isRunning) {
     console.log('The online prediction process has been terminated');
     return;
   }
-  
+
   const allSEMFiles = listFilesByTypeAsync(reportPath, '.sem');
   const currentSemFile = `${currentReport}.sem`;
-  
+
   // If .sem file doesn't exist yet, wait and retry
   if (allSEMFiles.indexOf(currentSemFile) === -1) {
     semWaitCount++;
-    
+
     // Timeout after 120 attempts (60 seconds) - skip this CSV and move to next
     if (semWaitCount >= 120) {
       console.log(`⚠️  Timeout waiting for .sem file: ${currentSemFile} - skipping`);
       // Skip this report and move to next
-      startOnlinePrediction(reportPath, modelPath, predictionPath, logPath, currentIndex + 1);
+      startOnlinePrediction(reportPath, modelPath, predictionPath, logPath, currentIndex + 1, 0, filterIPs);
       return;
     }
-    
+
     // Use setTimeout to avoid blocking the event loop (no logging during wait)
     setTimeout(() => {
-      checkForSemFile(reportPath, modelPath, predictionPath, logPath, currentIndex, currentReport, semWaitCount);
+      checkForSemFile(reportPath, modelPath, predictionPath, logPath, currentIndex, currentReport, semWaitCount, filterIPs);
     }, 500);
     return;
   }
-  
+
   // Both CSV and .sem exist, execute prediction using common function
   const csvPath = `${reportPath}/${currentReport}`;
-  
+
   executePrediction(csvPath, modelPath, predictionPath, logPath, (exitCode) => {
     // Process next report regardless of success/failure/skip
-    startOnlinePrediction(reportPath, modelPath, predictionPath, logPath, currentIndex + 1);
-  });
+    startOnlinePrediction(reportPath, modelPath, predictionPath, logPath, currentIndex + 1, 0, filterIPs);
+  }, filterIPs);
 };
 
 /**
@@ -471,6 +481,7 @@ const startPredicting = async (predictConfig, callback) => {
   const {
     modelId,
     inputTraffic,
+    filterIPs,  // ISIM integration: optional IP filter
   } = predictConfig;
   const modelPath = `${MODEL_PATH}${modelId}`;
   const logFilePath = `${LOG_PATH}predict_`;
@@ -502,11 +513,11 @@ const startPredicting = async (predictConfig, callback) => {
               // Create session in session manager
               const session = sessionManager.createSession('prediction', predictionId, 'offline', { config: predictConfig });
 
-              // Use common prediction execution function
+              // Use common prediction execution function (with optional IP filter for ISIM)
               executePrediction(csvPath, modelPath, predictionPath, logFile, (exitCode) => {
                 // Mark session as completed
                 sessionManager.completeSession('prediction', predictionId);
-              });
+              }, filterIPs);
 
               // Return session data in legacy format
               callback({
@@ -562,7 +573,7 @@ const startPredicting = async (predictConfig, callback) => {
                 config: session.config
               });
 
-              startOnlinePrediction(csvRootPath, modelPath, predictionPath, logFile, 0);
+              startOnlinePrediction(csvRootPath, modelPath, predictionPath, logFile, 0, 0, filterIPs);
             } else {
               // MMT didn't start and no explicit error - generic failure
               callback({

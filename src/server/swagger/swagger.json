@@ -1480,13 +1480,20 @@
                     "type" : "boolean",
                     "description" : "Use job queue for non-blocking execution (default: true)",
                     "example" : true
+                  },
+                  "filterIPs" : {
+                    "type" : "array",
+                    "items" : { "type" : "string" },
+                    "description" : "ISIM integration: Optional list of IP addresses to filter. Only traffic involving these IPs will be analyzed.",
+                    "example" : ["192.168.1.100", "10.0.0.5"]
                   }
                 }
               },
               "example" : {
                 "modelId" : "model_2",
                 "pcapFile" : "infiltration.pcap",
-                "useQueue" : true
+                "useQueue" : true,
+                "filterIPs" : ["192.168.1.100", "10.0.0.5"]
               }
             }
           },
@@ -1583,12 +1590,19 @@
                     "type" : "string",
                     "description" : "Network interface to monitor (e.g., eth0, lo)",
                     "example" : "eth0"
+                  },
+                  "filterIPs" : {
+                    "type" : "array",
+                    "items" : { "type" : "string" },
+                    "description" : "ISIM integration: Optional list of IP addresses to filter. Only traffic involving these IPs will be analyzed. Use with port mirroring for monitoring critical assets.",
+                    "example" : ["192.168.1.100", "10.0.0.5"]
                   }
                 }
               },
               "example" : {
                 "modelId" : "model_1",
-                "interface" : "eth0"
+                "interface" : "eth0",
+                "filterIPs" : ["192.168.1.100", "10.0.0.5"]
               }
             }
           }
@@ -2588,7 +2602,12 @@
                   "intervalSec" : {"type" : "number"},
                   "verbose" : {"type" : "boolean"},
                   "excludeRules" : {"type" : "array", "items" : {"type" : "string"}},
-                  "cores" : {"type" : "number"}
+                  "cores" : {"type" : "number"},
+                  "filterIPs" : {
+                    "type" : "array",
+                    "items" : {"type" : "string"},
+                    "description" : "ISIM integration: Optional list of IPs to filter. Only alerts involving these IPs will be returned."
+                  }
                 }
               },
               "example" : {
@@ -2596,7 +2615,8 @@
                 "intervalSec" : 5,
                 "verbose" : true,
                 "excludeRules" : [""],
-                "cores" : 1
+                "cores" : 1,
+                "filterIPs" : ["192.168.1.100", "10.0.0.5"]
               }
             }
           }
@@ -2638,7 +2658,12 @@
                   "useQueue" : {"type" : "boolean", "example" : false},
                   "verbose" : {"type" : "boolean"},
                   "excludeRules" : {"type" : "array", "items" : {"type" : "string"}},
-                  "cores" : {"type" : "number"}
+                  "cores" : {"type" : "number"},
+                  "filterIPs" : {
+                    "type" : "array",
+                    "items" : {"type" : "string"},
+                    "description" : "ISIM integration: Optional list of IPs to filter. Only alerts involving these IPs will be returned."
+                  }
                 }
               },
               "example" : {
@@ -2646,7 +2671,8 @@
                 "useQueue" : false,
                 "verbose" : true,
                 "excludeRules" : [""],
-                "cores" : 1
+                "cores" : 1,
+                "filterIPs" : ["192.168.1.100", "10.0.0.5"]
               }
             }
           }

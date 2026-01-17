@@ -342,7 +342,7 @@ router.get('/:predictionId', (req, res, next) => {
       const attackFlows = parts[1] || 0;
       const totalFlows = parts[2] || 0;
 
-      res.json({
+      const response = {
         totalFlows,
         attackFlows,
         normalFlows,
@@ -351,7 +351,21 @@ router.get('/:predictionId', (req, res, next) => {
         status: isOnlineMode && session?.isRunning ? 'running' : 'completed',
         intervals: lines.length,
         prediction: prediction
-      });
+      };
+
+      // Include filterIPs info if session has it (ISIM integration)
+      // filterIPs is stored in session.config.filterIPs (from predictConfig)
+      const filterIPs = session?.config?.filterIPs || session?.filterIPs;
+      if (filterIPs && Array.isArray(filterIPs) && filterIPs.length > 0) {
+        response.filterIPs = filterIPs;
+        if (totalFlows === 0) {
+          response.message = `No flows matched the specified filterIPs: ${filterIPs.join(', ')}`;
+        }
+      } else if (totalFlows === 0) {
+        response.message = 'No IP traffic found in the analyzed data';
+      }
+
+      res.json(response);
     }
   });
 });

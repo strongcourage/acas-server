@@ -27,6 +27,11 @@ const OUTPUT_DIRS = [TRAINING_PATH, PREDICTION_PATH, XAI_PATH, ATTACKS_PATH];
 
 const LOCAL_NATS_URL = 'nats://localhost:4222';
 
+// ISIM Integration - URL for Inventory/Scanning & Information Management
+// In Docker: use service name (resilmesh-sap-isim)
+// Local development: use localhost
+const ISIM_URL = process.env.ISIM_URL || 'http://localhost:8000';
+
 // Label constants for XAI and predictions
 const AD_OUTPUT_LABELS = ["Normal traffic", "Malware traffic"];
 const AD_OUTPUT_LABELS_SHORT = ["Normal", "Malware"];
@@ -53,6 +58,7 @@ module.exports = {
   PCAP_EXTENSIONS,
   OUTPUT_DIRS,
   LOCAL_NATS_URL,
+  ISIM_URL,
   AD_OUTPUT_LABELS,
   AD_OUTPUT_LABELS_SHORT,
   AC_OUTPUT_LABELS,

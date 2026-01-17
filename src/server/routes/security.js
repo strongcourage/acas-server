@@ -110,6 +110,37 @@ function findLatestSecurityCsv(dir) {
   }
 }
 
+/**
+ * Find ALL security CSV files in a directory (for online sessions)
+ * Returns array of file paths sorted by modification time (oldest first)
+ */
+function findAllSecurityCsvFiles(dir) {
+  try {
+    if (!dir || !fs.existsSync(dir)) return [];
+    const files = fs.readdirSync(dir)
+      .filter(f => f.endsWith('.csv'))
+      .map(f => ({ f, full: path.join(dir, f), st: fs.statSync(path.join(dir, f)) }))
+      .sort((a, b) => a.st.mtimeMs - b.st.mtimeMs); // oldest first
+    return files.map(f => f.full);
+  } catch (e) {
+    return [];
+  }
+}
+
+/**
+ * Parse ALL security CSV files in a directory and combine alerts
+ * Used for online sessions where multiple CSV files are created
+ */
+function parseAllSecurityCsvInDir(dir, limit = 2000) {
+  const allFiles = findAllSecurityCsvFiles(dir);
+  const allAlerts = [];
+  for (const file of allFiles) {
+    const alerts = parseSecurityCsv(file, limit);
+    allAlerts.push(...alerts);
+  }
+  return allAlerts;
+}
+
 function parseSecurityCsvLine(line) {
   // Example line:
   // 10,0,"",1758916808,56,"detected","attack","Probable SYN flooding attack (Half TCP handshake without TCP RST)",{"event_1":{...}}
@@ -232,6 +263,25 @@ function dedupeAlerts(list) {
   }
 }
 
+/**
+ * Filter alerts by IP addresses (ISIM integration)
+ * Only keeps alerts where srcIp OR dstIp matches one of the filterIPs
+ * @param {Array} alerts - Array of alert objects
+ * @param {Array} filterIPs - Array of IP addresses to filter by
+ * @returns {Array} - Filtered alerts
+ */
+function filterAlertsByIPs(alerts, filterIPs) {
+  if (!filterIPs || !Array.isArray(filterIPs) || filterIPs.length === 0) {
+    return alerts; // No filtering
+  }
+  const filterSet = new Set(filterIPs.map(ip => String(ip).trim().toLowerCase()));
+  return (alerts || []).filter(alert => {
+    const src = String(alert.srcIp || '').trim().toLowerCase();
+    const dst = String(alert.dstIp || '').trim().toLowerCase();
+    return filterSet.has(src) || filterSet.has(dst);
+  });
+}
+
 router.get('/rule-based/status', async (req, res) => {
   try {
     const { sessionId } = req.query;
@@ -274,7 +324,7 @@ router.get('/rule-based/alerts', async (req, res) => {
     const { sessionId, limit: limitParam } = req.query;
     const limit = limitParam ? Number(limitParam) : 500;
 
-    let file, outputDir;
+    let file, outputDir, filterIPs = null, isOnline = false;
     if (sessionId) {
       // Get alerts for specific session
       const session = sessionManager.getSession('attacks', sessionId);
@@ -283,16 +333,39 @@ router.get('/rule-based/alerts', async (req, res) => {
       }
       file = session.outputFile || findLatestSecurityCsv(session.outputDir);
       outputDir = session.outputDir;
+      filterIPs = session.filterIPs;  // Get filterIPs from session (ISIM integration)
+      isOnline = session.mode === 'online';
     } else {
       // Legacy: use global secState
       file = secState.outputFile || findLatestSecurityCsv(secState.outputDir);
       outputDir = secState.outputDir;
+      filterIPs = secState.filterIPs;  // Get filterIPs from global state
+      isOnline = secState.mode === 'online';
     }
 
-    if (!file) return res.send({ ok: true, alerts: [] });
-    const alerts = parseSecurityCsv(file, limit);
+    // For online sessions, read ALL CSV files in the output directory (not just the latest)
+    // because mmt_security creates multiple CSV files based on intervalSec rotation
+    let alerts;
+    if (isOnline && outputDir) {
+      alerts = parseAllSecurityCsvInDir(outputDir, limit);
+    } else if (file) {
+      alerts = parseSecurityCsv(file, limit);
+    } else {
+      return res.send({ ok: true, alerts: [], filterIPs: filterIPs || null });
+    }
+
+    // Apply IP filter if set for this session (ISIM integration)
+    alerts = filterAlertsByIPs(alerts, filterIPs);
     const uniqueAlerts = dedupeAlerts(alerts);
-    res.send({ ok: true, file, count: uniqueAlerts.length, alerts: uniqueAlerts });
+    const allFiles = isOnline && outputDir ? findAllSecurityCsvFiles(outputDir) : (file ? [file] : []);
+    res.send({
+      ok: true,
+      file: file || (allFiles.length > 0 ? allFiles[allFiles.length - 1] : null),
+      files: allFiles,
+      count: uniqueAlerts.length,
+      alerts: uniqueAlerts,
+      filterIPs: filterIPs || null
+    });
   } catch (e) {
     res.status(500).send(e.message || 'Failed to read alerts');
   }
@@ -300,7 +373,7 @@ router.get('/rule-based/alerts', async (req, res) => {
 
 router.post('/rule-based/online/start', async (req, res) => {
   try {
-    const { iface, intervalSec = 5, verbose = true, excludeRules, cores } = req.body || {};
+    const { iface, intervalSec = 5, verbose = true, excludeRules, cores, filterIPs } = req.body || {};
     if (!iface) return res.status(400).send('Missing iface');
 
     // Check if online rule-based detection is already running
@@ -402,6 +475,7 @@ router.post('/rule-based/online/start', async (req, res) => {
       ruleVerdicts: [],
       sessionId,
       startedBy: req.ip || 'unknown',
+      filterIPs: filterIPs || null,  // ISIM integration
     };
 
     // Create session in session manager
@@ -414,6 +488,7 @@ router.post('/rule-based/online/start', async (req, res) => {
       intervalSec: Number(intervalSec),
       ruleVerdicts: [],
       startedBy: req.ip || 'unknown',
+      filterIPs: filterIPs || null,  // ISIM integration
     });
 
     res.send({
@@ -437,41 +512,84 @@ router.post('/rule-based/online/start', async (req, res) => {
 
 router.post('/rule-based/online/stop', async (req, res) => {
   try {
-    if (!secState.running) return res.send({ ok: true, stopped: false });
+    // Check if there's an output directory from a previous/current session
+    const hasSession = secState.outputDir && secState.mode === 'online';
 
+    if (!secState.running && !hasSession) {
+      return res.send({ ok: true, stopped: false, message: 'No online session found' });
+    }
+
+    const wasRunning = secState.running;
     const stoppedPid = secState.pid;
     const child = secState.child;
-    try {
-      process.kill(stoppedPid, 'SIGINT');
-    } catch (e) {
-      console.warn('[SECURITY] Failed SIGINT by PID, trying pkill');
-      exec(`${SUDO}pkill -f mmt_security || ${SUDO}pkill -f mmt-security`, () => { });
-    }
-    // Wait briefly for the process to exit so ruleVerdicts can be finalized
-    if (child && typeof child.once === 'function') {
-      await Promise.race([
-        new Promise((resolve) => child.once('exit', resolve)),
-        new Promise((resolve) => setTimeout(resolve, 4000)),
-      ]);
-    } else {
-      // Fallback wait
-      await new Promise((r) => setTimeout(r, 1000));
+
+    // Only try to kill the process if it was actually running
+    if (wasRunning && stoppedPid) {
+      try {
+        process.kill(stoppedPid, 'SIGINT');
+      } catch (e) {
+        console.warn('[SECURITY] Failed SIGINT by PID, trying pkill');
+        exec(`${SUDO}pkill -f mmt_security || ${SUDO}pkill -f mmt-security`, () => { });
+      }
+      // Wait briefly for the process to exit so ruleVerdicts can be finalized
+      if (child && typeof child.once === 'function') {
+        await Promise.race([
+          new Promise((resolve) => child.once('exit', resolve)),
+          new Promise((resolve) => setTimeout(resolve, 4000)),
+        ]);
+      } else {
+        // Fallback wait
+        await new Promise((r) => setTimeout(r, 1000));
+      }
     }
     secState.running = false;
     secState.pid = null;
     const lastFile = findLatestSecurityCsv(secState.outputDir);
     if (lastFile) secState.outputFile = lastFile;
 
+    // Parse ALL CSV files in the session directory to get accumulated alerts
+    const allFiles = findAllSecurityCsvFiles(secState.outputDir);
+    let allAlerts = parseAllSecurityCsvInDir(secState.outputDir, 2000);
+    // Apply IP filter if set (ISIM integration)
+    allAlerts = filterAlertsByIPs(allAlerts, secState.filterIPs);
+    const uniqueAlerts = dedupeAlerts(allAlerts);
+
     // Update session manager
     if (secState.sessionId) {
       sessionManager.updateSession('attacks', secState.sessionId, {
         isRunning: false,
         outputFile: lastFile,
-        pid: null
+        pid: null,
+        alertCount: uniqueAlerts.length
       });
     }
 
-    res.send({ ok: true, stopped: true, ...secState });
+    // Build response with alerts included
+    const response = {
+      ok: true,
+      stopped: wasRunning, // true if we actually stopped it, false if it was already stopped
+      wasRunning,
+      running: secState.running,
+      mode: secState.mode,
+      pid: secState.pid,
+      child: null, // Don't expose child process object
+      iface: secState.iface,
+      pcapFile: secState.pcapFile,
+      outputDir: secState.outputDir,
+      outputFile: secState.outputFile,
+      files: allFiles,
+      startedAt: secState.startedAt,
+      intervalSec: secState.intervalSec,
+      ruleVerdicts: secState.ruleVerdicts,
+      sessionId: secState.sessionId,
+      startedBy: secState.startedBy,
+      filterIPs: secState.filterIPs,
+      // Include accumulated alerts
+      count: uniqueAlerts.length,
+      alerts: uniqueAlerts
+    };
+
+    res.send(response);
   } catch (e) {
     res.status(500).send(e.message || 'Failed to stop mmt_security');
   }
@@ -479,7 +597,7 @@ router.post('/rule-based/online/stop', async (req, res) => {
 
 router.post('/rule-based/offline', async (req, res) => {
   try {
-    const { pcapFile, filePath, verbose = false, excludeRules, cores, useQueue } = req.body || {};
+    const { pcapFile, filePath, verbose = false, excludeRules, cores, useQueue, filterIPs } = req.body || {};
     const userId = req.userId;
     let inputPath = null;
     if (filePath) {
@@ -564,7 +682,9 @@ router.post('/rule-based/offline', async (req, res) => {
 
           // Parse and return alerts
           const file = status.result?.outputFile;
-          const alerts = file ? parseSecurityCsv(file, 2000) : [];
+          let alerts = file ? parseSecurityCsv(file, 2000) : [];
+          // Apply IP filter if provided (ISIM integration)
+          alerts = filterAlertsByIPs(alerts, filterIPs);
           const uniqueAlerts = dedupeAlerts(alerts);
 
           return res.send({
@@ -575,7 +695,8 @@ router.post('/rule-based/offline', async (req, res) => {
             alerts: uniqueAlerts,
             ruleVerdicts: status.result?.ruleVerdicts || [],
             queued: true,
-            jobId: jobId
+            jobId: jobId,
+            filterIPs: filterIPs || null
           });
         } else if (status.status === 'failed') {
           console.error('[SECURITY] Job failed:', jobId, status.failedReason);
@@ -632,7 +753,9 @@ router.post('/rule-based/offline', async (req, res) => {
         return res.status(500).send(stderr || error.message);
       }
       const file = findLatestSecurityCsv(outDir);
-      const alerts = parseSecurityCsv(file, 2000);
+      let alerts = parseSecurityCsv(file, 2000);
+      // Apply IP filter if provided (ISIM integration)
+      alerts = filterAlertsByIPs(alerts, filterIPs);
       const uniqueAlerts = dedupeAlerts(alerts);
       const ruleVerdicts = parseRuleVerdictsFromText(`${stdout}\n${stderr}`);
 
@@ -649,7 +772,8 @@ router.post('/rule-based/offline', async (req, res) => {
         file,
         count: uniqueAlerts.length,
         alerts: uniqueAlerts,
-        ruleVerdicts
+        ruleVerdicts,
+        filterIPs: filterIPs || null
       };
 
       if (fallbackToSync) {

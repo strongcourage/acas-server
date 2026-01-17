@@ -1,5 +1,6 @@
 import os
 import sys
+import json
 import numpy as np
 import pandas as pd
 import constants
@@ -8,10 +9,40 @@ from eventToFeature import eventsToFeatures
 
 sys.path.append(sys.path[0] + '/..')
 
-def predict(csv_path, model_path, result_path):
-    ips, features = eventsToFeatures(csv_path)
+def predict(csv_path, model_path, result_path, filter_ips=None):
+    """
+    Run ML prediction on traffic features extracted from MMT CSV.
+
+    :param csv_path: Path to MMT CSV report
+    :param model_path: Path to trained model
+    :param result_path: Path to store prediction results
+    :param filter_ips: Optional list of IPs to filter (ISIM integration)
+    """
+    ips, features = eventsToFeatures(csv_path, filter_ips=filter_ips)
+
+    # Ensure result directory exists
+    if not os.path.exists(result_path):
+        os.makedirs(result_path)
+
     if len(ips) == 0:
-        print('There is no ip traffic to predict')
+        # No flows to predict - create empty results with stats
+        if filter_ips and len(filter_ips) > 0:
+            print(f'No IP traffic matching filter IPs: {filter_ips}')
+            print('filterIPs may not match any traffic in the PCAP file')
+        else:
+            print('There is no ip traffic to predict')
+
+        # Create empty stats file to indicate 0 predictions
+        statsArray = np.array([[0, 0, 0]])  # normal, attack, total = 0
+        pd.DataFrame(statsArray).to_csv(f"{result_path}/stats.csv", mode='w', index=False, header=False)
+
+        # Create empty predictions.csv with header only
+        empty_df = pd.DataFrame(columns=constants.AD_FEATURES_OUTPUT[:3] if len(constants.AD_FEATURES_OUTPUT) >= 3 else ['session_id', 'direction', 'ip'])
+        empty_df.to_csv(f"{result_path}/predictions.csv", mode='w', index=False, header=True)
+
+        print("Total flows: 0")
+        print("Number of attacks: 0")
+        print("Number of normals: 0")
         return
     # if there are more ips then grouped samples from features (i.e. there is an ip but no features for the ip) -> we delete the ip from ip list
     print("Going to merge features if there are more ips")
@@ -101,10 +132,23 @@ def predict(csv_path, model_path, result_path):
 
 if __name__ == "__main__":
     import sys
-    if len(sys.argv) != 4:
-        print('Invalid inputs')
+    if len(sys.argv) < 4:
+        print('Usage: python prediction.py <csv_path> <model_path> <result_path> [filter_ips_json]')
+        print('  filter_ips_json: Optional JSON array of IPs to filter, e.g., \'["10.0.0.5","10.0.0.6"]\'')
     else:
         csv_path = sys.argv[1]
         model_path = sys.argv[2]
         result_path = sys.argv[3]
-        predict(csv_path, model_path, result_path)
+
+        # Optional: parse filter_ips from JSON argument
+        filter_ips = None
+        if len(sys.argv) > 4 and sys.argv[4]:
+            try:
+                filter_ips = json.loads(sys.argv[4])
+                if filter_ips:
+                    print(f"IP filter enabled: {len(filter_ips)} IPs")
+            except json.JSONDecodeError as e:
+                print(f"Warning: Could not parse filter_ips JSON: {e}")
+                filter_ips = None
+
+        predict(csv_path, model_path, result_path, filter_ips=filter_ips)

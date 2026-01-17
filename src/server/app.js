@@ -57,6 +57,7 @@ const featuresRouter = require('./routes/features');
 const queueRouter = require('./routes/queue');
 const dpiRouter = require('./routes/dpi');
 const networkRouter = require('./routes/network');
+const isimRouter = require('./routes/isim');
 
 // Handle unhandled promise rejections (e.g., Redis connection errors)
 process.on('unhandledRejection', (reason, promise) => {
@@ -185,6 +186,7 @@ app.use('/api/features', featuresRouter);
 app.use('/api/queue', queueRouter);
 app.use('/api/dpi', dpiRouter);
 app.use('/api/network', networkRouter);
+app.use('/api/isim', isimRouter);
 
 // Swagger API documentation - available in all modes at /docs
 app.use('/docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument));
