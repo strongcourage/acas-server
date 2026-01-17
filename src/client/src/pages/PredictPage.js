@@ -2,8 +2,8 @@ import React, { Component } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import LayoutPage from './LayoutPage';
-import { Table, Tooltip, notification, Upload, Spin, Button, Form, Select, Menu, Modal, Divider, Card, Row, Col, Statistic, Tag, Space, Typography } from 'antd';
-import { UploadOutlined, CheckCircleOutlined, WarningOutlined, ClockCircleOutlined, PlayCircleOutlined, StopOutlined, LockOutlined, FileTextOutlined, SendOutlined, UserOutlined, DatabaseOutlined } from "@ant-design/icons";
+import { Table, Tooltip, notification, Upload, Spin, Button, Form, Select, Menu, Modal, Divider, Card, Row, Col, Statistic, Tag, Space, Typography, Input, Alert } from 'antd';
+import { UploadOutlined, CheckCircleOutlined, WarningOutlined, ClockCircleOutlined, PlayCircleOutlined, StopOutlined, LockOutlined, FileTextOutlined, SendOutlined, UserOutlined, DatabaseOutlined, FilterOutlined, ApiOutlined, PlusOutlined } from "@ant-design/icons";
 import { connect } from "react-redux";
 import { useUserRole } from '../hooks/useUserRole';
 import { Pie, Bar } from '@ant-design/plots';
@@ -31,6 +31,8 @@ import {
   requestPredictOnlineStart,
   requestPredictOnlineStatus,
   requestPredictOnlineStop,
+  requestISIMStatus,
+  requestISIMAssets,
 } from "../api";
 import {
   getFilteredModelsOptions,
@@ -88,6 +90,16 @@ class PredictPage extends Component {
       assistantText: '',
       assistantLoading: false,
       assistantTokenInfo: null,
+
+      // ISIM integration: Filter IPs
+      filterIPsInput: '', // Raw input string (comma-separated IPs)
+      activeFilterIPs: null, // Array of IPs used in current prediction (for display)
+      // ISIM modal
+      isimModalVisible: false,
+      isimLoading: false,
+      isimConnected: null, // null = unknown, true = connected, false = disconnected
+      isimAssets: [], // Critical assets from ISIM
+      isimSelectedRowKeys: [], // Selected rows in ISIM table
     };
     this.handleButtonStart = this.handleButtonStart.bind(this);
     this.handleButtonStop = this.handleButtonStop.bind(this);
@@ -161,6 +173,121 @@ class PredictPage extends Component {
     if (isNaN(portNum)) return false;
     // Must be integer between 1 and 65535
     return portNum >= 1 && portNum <= 65535 && portNum === Math.floor(portNum);
+  }
+
+  // Parse filterIPs input string into array of valid IPs (ISIM integration)
+  parseFilterIPs = (input) => {
+    if (!input || typeof input !== 'string') return null;
+    const ips = input
+      .split(/[,;\s]+/)
+      .map(ip => ip.trim())
+      .filter(ip => ip && this.isValidIPv4(ip));
+    return ips.length > 0 ? ips : null;
+  }
+
+  // ISIM Integration: Open modal and fetch assets (sorted by criticality)
+  handleOpenISIMModal = async () => {
+    this.setState({ isimModalVisible: true, isimLoading: true, isimAssets: [], isimSelectedRowKeys: [] });
+
+    try {
+      // First check connectivity
+      const status = await requestISIMStatus();
+      if (!status.connected) {
+        this.setState({ isimConnected: false, isimLoading: false });
+        notification.warning({
+          message: 'ISIM Not Connected',
+          description: `Cannot connect to ISIM at ${status.url}. Please check the ISIM service.`,
+          placement: 'topRight',
+        });
+        return;
+      }
+
+      this.setState({ isimConnected: true });
+
+      // Fetch all assets (server returns them sorted by criticality)
+      const assets = await requestISIMAssets(1000, 0);
+      this.setState({
+        isimAssets: assets || [],
+        isimLoading: false,
+      });
+
+      if (assets.length === 0) {
+        notification.info({
+          message: 'No Assets Found',
+          description: 'No assets found in ISIM.',
+          placement: 'topRight',
+        });
+      }
+    } catch (error) {
+      this.setState({ isimConnected: false, isimLoading: false });
+      notification.error({
+        message: 'ISIM Error',
+        description: error.message || 'Failed to fetch assets from ISIM',
+        placement: 'topRight',
+      });
+    }
+  }
+
+  // ISIM Integration: Add selected IPs to filter input
+  handleAddSelectedISIMIPs = () => {
+    const { isimSelectedRowKeys, filterIPsInput } = this.state;
+    if (isimSelectedRowKeys.length === 0) {
+      notification.warning({
+        message: 'No IPs Selected',
+        description: 'Please select at least one asset from the table.',
+        placement: 'topRight',
+      });
+      return;
+    }
+
+    // Parse existing IPs
+    const existingIPs = filterIPsInput
+      .split(/[,;\s]+/)
+      .map(ip => ip.trim())
+      .filter(ip => ip);
+
+    // Merge with selected IPs (avoid duplicates)
+    const newIPs = [...new Set([...existingIPs, ...isimSelectedRowKeys])];
+
+    this.setState({
+      filterIPsInput: newIPs.join(', '),
+      isimModalVisible: false,
+      isimSelectedRowKeys: [],
+    });
+
+    notification.success({
+      message: 'IPs Added',
+      description: `Added ${isimSelectedRowKeys.length} IP(s) to filter.`,
+      placement: 'topRight',
+    });
+  }
+
+  // ISIM Integration: Add single IP to filter
+  handleAddSingleISIMIP = (ip) => {
+    const { filterIPsInput } = this.state;
+    const existingIPs = filterIPsInput
+      .split(/[,;\s]+/)
+      .map(i => i.trim())
+      .filter(i => i);
+
+    if (existingIPs.includes(ip)) {
+      notification.info({
+        message: 'IP Already Added',
+        description: `${ip} is already in the filter list.`,
+        placement: 'topRight',
+      });
+      return;
+    }
+
+    const newIPs = [...existingIPs, ip];
+    this.setState({ filterIPsInput: newIPs.join(', ') });
+
+    notification.success({
+      message: 'IP Added',
+      description: `Added ${ip} to filter.`,
+      placement: 'topRight',
+      duration: 2,
+    });
   }
 
   componentDidMount() {
@@ -365,7 +492,19 @@ class PredictPage extends Component {
 
     if (!isRunning) {
       // Set isRunning immediately to disable button and show loading spinner
-      this.setState({ isRunning: true });
+      // Clear previous results to avoid confusion
+      this.setState({
+        isRunning: true,
+        predictStats: null,
+        attackCsv: null,
+        attackRows: [],
+        attackColumns: [],
+        attackFlowColumns: [],
+        mitigationColumns: [],
+        aggregateNormal: 0,
+        aggregateMalicious: 0,
+        hasResultsShown: false,
+      });
 
       if (!testingPcapFile) {
         this.setState({ isRunning: false });
@@ -377,19 +516,24 @@ class PredictPage extends Component {
       const { requestPredictOfflineSimplified, requestPredictJobStatus } = require('../api');
 
       try {
-        console.log('Starting simplified prediction for:', testingPcapFile, 'with model:', fetchModelId);
+        // Parse filter IPs for ISIM integration
+        const filterIPs = this.parseFilterIPs(this.state.filterIPsInput);
 
-        const queueResponse = await requestPredictOfflineSimplified(fetchModelId, testingPcapFile, true, this.props.userRole);
+        console.log('Starting simplified prediction for:', testingPcapFile, 'with model:', fetchModelId, 'filterIPs:', filterIPs);
+
+        const queueResponse = await requestPredictOfflineSimplified(fetchModelId, testingPcapFile, true, this.props.userRole, filterIPs);
 
         console.log('Prediction queued:', queueResponse);
         this.setState({
           currentJobId: queueResponse.jobId,
-          currentPredictionId: queueResponse.predictionId
+          currentPredictionId: queueResponse.predictionId,
+          activeFilterIPs: filterIPs,
         });
 
+        const filterMsg = filterIPs ? ` (filtering ${filterIPs.length} IPs)` : '';
         notification.success({
           message: 'Prediction Job Queued',
-          description: 'Server is analyzing PCAP and running prediction...',
+          description: `Server is analyzing PCAP and running prediction${filterMsg}...`,
           placement: 'topRight',
           duration: 3,
         });
@@ -1031,11 +1175,15 @@ class PredictPage extends Component {
     }
 
     try {
+      // Parse filter IPs for ISIM integration
+      const filterIPs = this.parseFilterIPs(this.state.filterIPsInput);
+
       // Start integrated online prediction
-      const result = await requestPredictOnlineStart(modelId, iface);
+      const result = await requestPredictOnlineStart(modelId, iface, filterIPs);
 
       if (result.success) {
-        notification.success({ message: 'Started', description: `Online prediction started on ${iface}`, placement: 'topRight' });
+        const filterMsg = filterIPs ? ` (filtering ${filterIPs.length} IPs)` : '';
+        notification.success({ message: 'Started', description: `Online prediction started on ${iface}${filterMsg}`, placement: 'topRight' });
         this.setState({
           isRunningOnline: true,
           currentPredictionId: result.predictionId,
@@ -1045,6 +1193,7 @@ class PredictPage extends Component {
           attackRows: [],
           attackFlowColumns: [],
           mitigationColumns: [],
+          activeFilterIPs: filterIPs,
         });
 
         // Start polling for results (every 10 seconds to reduce server load)
@@ -1482,7 +1631,41 @@ class PredictPage extends Component {
                 </div>
               </Col>
             </Row>
-            
+
+            {/* ISIM Integration: Filter IPs for offline mode */}
+            <Row gutter={16} align="middle" style={{ marginBottom: 16 }}>
+              <Col span={6} style={{ textAlign: 'right', paddingRight: 16 }}>
+                <Tooltip title="ISIM Integration: Only analyze traffic involving these IPs. Leave empty to analyze all traffic.">
+                  <strong>Filter IPs:</strong>
+                </Tooltip>
+              </Col>
+              <Col span={18}>
+                <Space>
+                  <Input
+                    placeholder="Enter IPs to filter (comma-separated, e.g., 192.168.1.100, 10.0.0.5)"
+                    value={this.state.filterIPsInput}
+                    onChange={(e) => this.setState({ filterIPsInput: e.target.value })}
+                    disabled={isRunning}
+                    style={{ width: 350 }}
+                    allowClear
+                  />
+                  <Tooltip title="Fetch assets from ISIM">
+                    <Button
+                      onClick={this.handleOpenISIMModal}
+                      disabled={isRunning}
+                    >
+                      ISIM Assets
+                    </Button>
+                  </Tooltip>
+                  <Typography.Text type="secondary" style={{ fontSize: '12px', whiteSpace: 'nowrap' }}>
+                    {this.parseFilterIPs(this.state.filterIPsInput)
+                      ? `${this.parseFilterIPs(this.state.filterIPsInput).length} valid IP(s)`
+                      : 'No filter (all traffic)'}
+                  </Typography.Text>
+                </Space>
+              </Col>
+            </Row>
+
             <Row gutter={16} align="middle" style={{ marginTop: 24 }}>
               <Col span={6}></Col>
               <Col span={18}>
@@ -1566,6 +1749,40 @@ class PredictPage extends Component {
               </Col>
             </Row>
 
+            {/* ISIM Integration: Filter IPs for online mode */}
+            <Row gutter={16} align="middle" style={{ marginBottom: 16 }}>
+              <Col span={6} style={{ textAlign: 'right', paddingRight: 16 }}>
+                <Tooltip title="ISIM Integration: Only analyze traffic involving these IPs. Leave empty to analyze all traffic.">
+                  <strong>Filter IPs:</strong>
+                </Tooltip>
+              </Col>
+              <Col span={18}>
+                <Space>
+                  <Input
+                    placeholder="Enter IPs to filter (comma-separated, e.g., 192.168.1.100, 10.0.0.5)"
+                    value={this.state.filterIPsInput}
+                    onChange={(e) => this.setState({ filterIPsInput: e.target.value })}
+                    disabled={isRunningOnline}
+                    style={{ width: 350 }}
+                    allowClear
+                  />
+                  <Tooltip title="Fetch assets from ISIM">
+                    <Button
+                      onClick={this.handleOpenISIMModal}
+                      disabled={isRunningOnline}
+                    >
+                      ISIM Assets
+                    </Button>
+                  </Tooltip>
+                  <Typography.Text type="secondary" style={{ fontSize: '12px', whiteSpace: 'nowrap' }}>
+                    {this.parseFilterIPs(this.state.filterIPsInput)
+                      ? `${this.parseFilterIPs(this.state.filterIPsInput).length} valid IP(s)`
+                      : 'No filter (all traffic)'}
+                  </Typography.Text>
+                </Space>
+              </Col>
+            </Row>
+
             <Row gutter={16} align="middle" style={{ marginTop: 24 }}>
               <Col span={6}></Col>
               <Col span={18}>
@@ -1603,6 +1820,11 @@ class PredictPage extends Component {
             <Card style={{ marginBottom: 24 }}>
               <div style={{ textAlign: 'center', marginBottom: 16 }}>
                 <strong style={{ fontSize: 16 }}>Prediction Summary</strong>
+                {this.state.activeFilterIPs && this.state.activeFilterIPs.length > 0 && (
+                  <Tag color="blue" style={{ marginLeft: 12 }}>
+                    <FilterOutlined /> Filtered: {this.state.activeFilterIPs.join(', ')}
+                  </Tag>
+                )}
               </div>
               <Row gutter={8}>
                 <Col xs={24} sm={8} md={4}>
@@ -1796,6 +2018,94 @@ class PredictPage extends Component {
             </Modal>
           </>
         ) : null}
+
+        {/* ISIM Assets Modal */}
+        <Modal
+          title={
+            <Space>
+              ISIM Assets
+              {this.state.isimConnected === true && <Tag color="green">Connected</Tag>}
+              {this.state.isimConnected === false && <Tag color="red">Disconnected</Tag>}
+            </Space>
+          }
+          open={this.state.isimModalVisible}
+          onCancel={() => this.setState({ isimModalVisible: false })}
+          width={900}
+          footer={[
+            <Button key="cancel" onClick={() => this.setState({ isimModalVisible: false })}>
+              Cancel
+            </Button>,
+            <Button
+              key="add"
+              type="primary"
+              icon={<PlusOutlined />}
+              onClick={this.handleAddSelectedISIMIPs}
+              disabled={this.state.isimSelectedRowKeys.length === 0}
+            >
+              Add Selected IPs ({this.state.isimSelectedRowKeys.length})
+            </Button>
+          ]}
+        >
+          {this.state.isimLoading ? (
+            <div style={{ display: 'flex', justifyContent: 'center', padding: 48 }}>
+              <Spin size="large" tip="Fetching assets from ISIM..." />
+            </div>
+          ) : this.state.isimConnected === false ? (
+            <Alert
+              type="error"
+              message="ISIM Not Available"
+              description="Cannot connect to ISIM service. Please ensure ISIM is running and accessible."
+              showIcon
+            />
+          ) : (
+            <>
+              <Alert
+                type="info"
+                message={`Found ${this.state.isimAssets.length} asset(s)`}
+                showIcon
+                style={{ marginBottom: 16 }}
+              />
+              <Table
+                rowSelection={{
+                  selectedRowKeys: this.state.isimSelectedRowKeys,
+                  onChange: (selectedRowKeys) => this.setState({ isimSelectedRowKeys: selectedRowKeys }),
+                }}
+                dataSource={this.state.isimAssets.map((asset, idx) => ({ key: asset.ip, ...asset, idx: idx + 1 }))}
+                columns={[
+                  { title: '#', dataIndex: 'idx', key: 'idx', width: 50 },
+                  { title: 'IP Address', dataIndex: 'ip', key: 'ip', width: 140 },
+                  {
+                    title: 'Criticality',
+                    dataIndex: 'critical',
+                    key: 'critical',
+                    width: 100,
+                    sorter: (a, b) => b.critical - a.critical,
+                  },
+                  { title: 'Domain', dataIndex: 'domain_names', key: 'domain_names', render: (v) => (Array.isArray(v) ? v.join(', ') : v || '-') },
+                  { title: 'Missions', dataIndex: 'missions', key: 'missions', render: (v) => (Array.isArray(v) ? v.join(', ') : v || '-') },
+                  { title: 'Subnets', dataIndex: 'subnets', key: 'subnets', render: (v) => (Array.isArray(v) ? v.join(', ') : v || '-') },
+                  {
+                    title: 'Action',
+                    key: 'action',
+                    width: 100,
+                    render: (_, record) => (
+                      <Button
+                        size="small"
+                        icon={<PlusOutlined />}
+                        onClick={() => this.handleAddSingleISIMIP(record.ip)}
+                      >
+                        Add
+                      </Button>
+                    )
+                  }
+                ]}
+                size="small"
+                pagination={{ pageSize: 10, showSizeChanger: true, showTotal: (total) => `Total ${total} assets` }}
+                scroll={{ x: 'max-content' }}
+              />
+            </>
+          )}
+        </Modal>
 
       </LayoutPage>
     );

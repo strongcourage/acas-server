@@ -661,12 +661,22 @@ export const requestPredictStatus = async () => {
 };
 
 // Online prediction API functions
-export const requestPredictOnlineStart = async (modelId, networkInterface) => {
+/**
+ * Start online AI prediction on a network interface
+ * @param {string} modelId - Model ID to use for prediction
+ * @param {string} networkInterface - Network interface name (e.g., eth0)
+ * @param {string[]} filterIPs - Optional: ISIM integration - only analyze traffic involving these IPs
+ */
+export const requestPredictOnlineStart = async (modelId, networkInterface, filterIPs = null) => {
   const url = `${SERVER_URL}/api/predict/online`;
+  const payload = { modelId, interface: networkInterface };
+  if (filterIPs && Array.isArray(filterIPs) && filterIPs.length > 0) {
+    payload.filterIPs = filterIPs;
+  }
   const response = await fetchWithAuth(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ modelId, interface: networkInterface })
+    body: JSON.stringify(payload)
   });
   if (!response.ok) {
     const error = await response.text();
@@ -696,13 +706,18 @@ export const requestPredictOnlineStop = async () => {
  * @param {string} pcapFile - PCAP filename
  * @param {boolean} useQueue - Use job queue (default: true)
  * @param {object} userRole - User role object from useUserRole hook (for anonymous user identification)
+ * @param {string[]} filterIPs - Optional: ISIM integration - only analyze traffic involving these IPs
  */
-export const requestPredictOfflineSimplified = async (modelId, pcapFile, useQueue = true, userRole = null) => {
+export const requestPredictOfflineSimplified = async (modelId, pcapFile, useQueue = true, userRole = null, filterIPs = null) => {
   const url = `${SERVER_URL}/api/predict/offline`;
+  const payload = { modelId, pcapFile, useQueue };
+  if (filterIPs && Array.isArray(filterIPs) && filterIPs.length > 0) {
+    payload.filterIPs = filterIPs;
+  }
   const response = await fetchWithAuth(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ modelId, pcapFile, useQueue })
+    body: JSON.stringify(payload)
   }, userRole);
   if (!response.ok) {
     const errorText = await response.text();
@@ -803,11 +818,24 @@ export const requestRuleAlerts = async (limit = 500, sessionId) => {
   return res.json(); // { ok, file, count, alerts }
 };
 
-export const requestRuleOnlineStart = async ({ iface, intervalSec = 5, verbose = true, excludeRules, cores } = {}) => {
+/**
+ * Start online rule-based detection on a network interface
+ * @param {object} options - Configuration options
+ * @param {string} options.iface - Network interface name
+ * @param {number} options.intervalSec - Polling interval in seconds (default: 5)
+ * @param {boolean} options.verbose - Verbose output (default: true)
+ * @param {string} options.excludeRules - Rules to exclude
+ * @param {number} options.cores - Number of CPU cores to use
+ * @param {string[]} options.filterIPs - ISIM integration: only analyze traffic involving these IPs
+ */
+export const requestRuleOnlineStart = async ({ iface, intervalSec = 5, verbose = true, excludeRules, cores, filterIPs } = {}) => {
   const url = `${SERVER_URL}/api/security/rule-based/online/start`;
   const payload = { iface, intervalSec, verbose };
   if (excludeRules) payload.excludeRules = excludeRules;
   if (cores) payload.cores = cores;
+  if (filterIPs && Array.isArray(filterIPs) && filterIPs.length > 0) {
+    payload.filterIPs = filterIPs;
+  }
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -854,7 +882,18 @@ export const requestRuleOnlineStop = async () => {
   return res.json();
 };
 
-export const requestRuleOffline = async ({ pcapFile, filePath, verbose = false, excludeRules, cores, userRole } = {}) => {
+/**
+ * Run offline rule-based detection on a PCAP file
+ * @param {object} options - Configuration options
+ * @param {string} options.pcapFile - PCAP filename
+ * @param {string} options.filePath - Full file path (alternative to pcapFile)
+ * @param {boolean} options.verbose - Verbose output (default: false)
+ * @param {string} options.excludeRules - Rules to exclude
+ * @param {number} options.cores - Number of CPU cores to use
+ * @param {object} options.userRole - User role object for authentication
+ * @param {string[]} options.filterIPs - ISIM integration: only analyze traffic involving these IPs
+ */
+export const requestRuleOffline = async ({ pcapFile, filePath, verbose = false, excludeRules, cores, userRole, filterIPs } = {}) => {
   const url = `${SERVER_URL}/api/security/rule-based/offline`;
   const body = {};
   if (filePath) body.filePath = filePath;
@@ -862,6 +901,9 @@ export const requestRuleOffline = async ({ pcapFile, filePath, verbose = false, 
   if (verbose) body.verbose = true;
   if (excludeRules) body.excludeRules = excludeRules;
   if (cores) body.cores = cores;
+  if (filterIPs && Array.isArray(filterIPs) && filterIPs.length > 0) {
+    body.filterIPs = filterIPs;
+  }
   const { fetchWithAuth } = require('../utils/fetchWithAuth');
   const res = await fetchWithAuth(url, {
     method: 'POST',
@@ -869,7 +911,7 @@ export const requestRuleOffline = async ({ pcapFile, filePath, verbose = false, 
     body: JSON.stringify(body),
   }, userRole);
   if (!res.ok) throw new Error(await res.text());
-  return res.json(); // { ok, file, count, alerts }
+  return res.json(); // { ok, file, count, alerts, filterIPs }
 };
 
 // Feature extraction API: run end-to-end extraction on an uploaded PCAP
@@ -923,4 +965,78 @@ export const requestJobStatus = async (jobId, queueName) => {
   }
   // Backend spreads status into response, so return the whole data object
   return data;
+};
+
+// ============================================================================
+// ISIM Integration APIs
+// ============================================================================
+
+/**
+ * Check ISIM connectivity status
+ */
+export const requestISIMStatus = async () => {
+  const url = `${SERVER_URL}/api/isim/status`;
+  const response = await fetch(url);
+  return response.json();
+};
+
+/**
+ * Get all assets from ISIM with pagination
+ * @param {number} limit - Number of results (default: 50)
+ * @param {number} offset - Pagination offset (default: 0)
+ */
+export const requestISIMAssets = async (limit = 50, offset = 0) => {
+  const url = `${SERVER_URL}/api/isim/asset_info?limit=${limit}&offset=${offset}`;
+  const response = await fetch(url);
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.message || error.error || 'Failed to fetch ISIM assets');
+  }
+  return response.json();
+};
+
+/**
+ * Get critical assets from ISIM (critical=1)
+ * @param {number} limit - Maximum number of results (default: 1000)
+ */
+export const requestISIMCriticalAssets = async (limit = 1000) => {
+  const url = `${SERVER_URL}/api/isim/assets/critical?limit=${limit}`;
+  const response = await fetch(url);
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.message || error.error || 'Failed to fetch critical assets');
+  }
+  return response.json();
+};
+
+/**
+ * Get information for a specific IP from ISIM
+ * @param {string} ip - IP address to look up
+ */
+export const requestISIMAssetByIP = async (ip) => {
+  const url = `${SERVER_URL}/api/isim/assets/${encodeURIComponent(ip)}`;
+  const response = await fetch(url);
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.message || error.error || 'Asset not found');
+  }
+  return response.json();
+};
+
+/**
+ * Enrich a list of IPs with ISIM context
+ * @param {string[]} ips - Array of IP addresses to enrich
+ */
+export const requestISIMEnrich = async (ips) => {
+  const url = `${SERVER_URL}/api/isim/enrich`;
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ips })
+  });
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.message || error.error || 'Failed to enrich IPs');
+  }
+  return response.json();
 };

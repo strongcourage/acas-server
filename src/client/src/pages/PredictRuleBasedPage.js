@@ -2,8 +2,8 @@ import React, { Component } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import LayoutPage from './LayoutPage';
-import { Form, Select, Button, Table, Divider, Tooltip, Upload, Spin, message, notification, Dropdown, Menu, Modal, Card, Row, Col, Statistic, Tag, Space, Alert, Typography } from 'antd';
-import { UploadOutlined, DeleteOutlined, PlayCircleOutlined, StopOutlined, SendOutlined, LockOutlined, FileTextOutlined, CheckCircleOutlined, WarningOutlined, UserOutlined, DatabaseOutlined } from '@ant-design/icons';
+import { Form, Select, Button, Table, Divider, Tooltip, Upload, Spin, message, notification, Dropdown, Menu, Modal, Card, Row, Col, Statistic, Tag, Space, Alert, Typography, Input } from 'antd';
+import { UploadOutlined, DeleteOutlined, PlayCircleOutlined, StopOutlined, SendOutlined, LockOutlined, FileTextOutlined, CheckCircleOutlined, WarningOutlined, UserOutlined, DatabaseOutlined, FilterOutlined, CloudServerOutlined, PlusOutlined, ApiOutlined } from '@ant-design/icons';
 import { useUserRole } from '../hooks/useUserRole';
 import { Line } from '@ant-design/plots';
 import {
@@ -20,6 +20,8 @@ import {
   requestRuleOnlineStop,
   requestRuleOffline,
   requestAssistantExplainFlow,
+  requestISIMStatus,
+  requestISIMAssets,
 } from '../api';
 import { handleMitigationAction, handleBulkMitigationAction } from '../utils/mitigation';
 import { computeFlowDetails, isValidIPv4 } from '../utils/flowDetails';
@@ -56,7 +58,131 @@ class PredictRuleBasedPage extends Component {
       assistantText: '',
       assistantLoading: false,
       assistantTokenInfo: null,
+      // ISIM integration: Filter IPs
+      filterIPsInput: '', // Raw input string (comma-separated IPs)
+      activeFilterIPs: null, // Array of IPs used in current detection (for display)
+      // ISIM modal
+      isimModalVisible: false,
+      isimLoading: false,
+      isimConnected: null, // null = unknown, true = connected, false = disconnected
+      isimAssets: [], // Critical assets from ISIM
+      isimSelectedRowKeys: [], // Selected rows in ISIM table
     };
+  }
+
+  // Parse filterIPs input string into array of valid IPs
+  parseFilterIPs = (input) => {
+    if (!input || typeof input !== 'string') return null;
+    const ips = input
+      .split(/[,;\s]+/)
+      .map(ip => ip.trim())
+      .filter(ip => ip && isValidIPv4(ip));
+    return ips.length > 0 ? ips : null;
+  }
+
+  // ISIM Integration: Open modal and fetch assets (sorted by criticality)
+  handleOpenISIMModal = async () => {
+    this.setState({ isimModalVisible: true, isimLoading: true, isimAssets: [], isimSelectedRowKeys: [] });
+
+    try {
+      // First check connectivity
+      const status = await requestISIMStatus();
+      if (!status.connected) {
+        this.setState({ isimConnected: false, isimLoading: false });
+        notification.warning({
+          message: 'ISIM Not Connected',
+          description: `Cannot connect to ISIM at ${status.url}. Please check the ISIM service.`,
+          placement: 'topRight',
+        });
+        return;
+      }
+
+      this.setState({ isimConnected: true });
+
+      // Fetch all assets (server returns them sorted by criticality)
+      const assets = await requestISIMAssets(1000, 0);
+      this.setState({
+        isimAssets: assets || [],
+        isimLoading: false,
+      });
+
+      if (assets.length === 0) {
+        notification.info({
+          message: 'No Assets Found',
+          description: 'No assets found in ISIM.',
+          placement: 'topRight',
+        });
+      }
+    } catch (error) {
+      this.setState({ isimConnected: false, isimLoading: false });
+      notification.error({
+        message: 'ISIM Error',
+        description: error.message || 'Failed to fetch assets from ISIM',
+        placement: 'topRight',
+      });
+    }
+  }
+
+  // ISIM Integration: Add selected IPs to filter input
+  handleAddSelectedISIMIPs = () => {
+    const { isimSelectedRowKeys, filterIPsInput } = this.state;
+    if (isimSelectedRowKeys.length === 0) {
+      notification.warning({
+        message: 'No IPs Selected',
+        description: 'Please select at least one asset from the table.',
+        placement: 'topRight',
+      });
+      return;
+    }
+
+    // Parse existing IPs
+    const existingIPs = filterIPsInput
+      .split(/[,;\s]+/)
+      .map(ip => ip.trim())
+      .filter(ip => ip);
+
+    // Merge with selected IPs (avoid duplicates)
+    const newIPs = [...new Set([...existingIPs, ...isimSelectedRowKeys])];
+
+    this.setState({
+      filterIPsInput: newIPs.join(', '),
+      isimModalVisible: false,
+      isimSelectedRowKeys: [],
+    });
+
+    notification.success({
+      message: 'IPs Added',
+      description: `Added ${isimSelectedRowKeys.length} IP(s) to filter.`,
+      placement: 'topRight',
+    });
+  }
+
+  // ISIM Integration: Add single IP to filter
+  handleAddSingleISIMIP = (ip) => {
+    const { filterIPsInput } = this.state;
+    const existingIPs = filterIPsInput
+      .split(/[,;\s]+/)
+      .map(i => i.trim())
+      .filter(i => i);
+
+    if (existingIPs.includes(ip)) {
+      notification.info({
+        message: 'IP Already Added',
+        description: `${ip} is already in the filter list.`,
+        placement: 'topRight',
+      });
+      return;
+    }
+
+    const newIPs = [...existingIPs, ip];
+    this.setState({ filterIPsInput: newIPs.join(', ') });
+
+    notification.success({
+      message: 'IP Added',
+      description: `Added ${ip} to filter.`,
+      placement: 'topRight',
+      duration: 2,
+    });
   }
 
   onAssistantExplain = (record) => {
@@ -261,8 +387,8 @@ class PredictRuleBasedPage extends Component {
   }
 
   handleStartOnline = async () => {
-    const { iface, intervalSec } = this.state;
-    
+    const { iface, intervalSec, filterIPsInput } = this.state;
+
     if (!iface) {
       notification.warning({
         message: 'No Interface Selected',
@@ -271,16 +397,20 @@ class PredictRuleBasedPage extends Component {
       });
       return;
     }
-    
+
     try {
+      // Parse filter IPs for ISIM integration
+      const filterIPs = this.parseFilterIPs(filterIPsInput);
+
       // Clear previous alerts for a fresh run
-      this.setState({ alerts: [], alertSeries: [], alertSeriesByRule: [], detectionComplete: true });
-      const data = await requestRuleOnlineStart({ iface, intervalSec });
-      
+      this.setState({ alerts: [], alertSeries: [], alertSeriesByRule: [], detectionComplete: true, activeFilterIPs: filterIPs });
+      const data = await requestRuleOnlineStart({ iface, intervalSec, filterIPs });
+
       this.setState({ onlineRunning: true, status: data }, () => {
+        const filterMsg = filterIPs ? ` (filtering ${filterIPs.length} IPs)` : '';
         notification.success({
           message: 'Success',
-          description: `Started rule-based detection on ${iface}`,
+          description: `Started rule-based detection on ${iface}${filterMsg}`,
           placement: 'topRight',
         });
         this.pollStatus();
@@ -379,18 +509,32 @@ class PredictRuleBasedPage extends Component {
   }
 
   handleOfflineDetect = async () => {
-    const { pcapFile } = this.state;
+    const { pcapFile, filterIPsInput } = this.state;
     if (!pcapFile) return;
     try {
-      this.setState({ offlineLoading: true });
-      
+      // Parse filter IPs for ISIM integration
+      const filterIPs = this.parseFilterIPs(filterIPsInput);
+
+      // Clear previous results to avoid confusion
+      this.setState({
+        offlineLoading: true,
+        activeFilterIPs: filterIPs,
+        alerts: [],
+        ruleCountsByCode: {},
+        alertSeries: [],
+        alertSeriesByRule: [],
+        detectionComplete: false,
+        status: null,
+      });
+
+      const filterMsg = filterIPs ? ` (filtering ${filterIPs.length} IPs)` : '';
       notification.info({
         message: 'Rule-Based Detection Started',
-        description: `Analyzing "${pcapFile}" with security rules...`,
+        description: `Analyzing "${pcapFile}" with security rules${filterMsg}...`,
         placement: 'topRight',
         duration: 2,
       });
-      const data = await requestRuleOffline({ pcapFile, userRole: this.props.userRole });
+      const data = await requestRuleOffline({ pcapFile, userRole: this.props.userRole, filterIPs });
       notification.success({
         message: 'Success',
         description: `Offline detection finished: ${data.count} alerts`,
@@ -672,18 +816,32 @@ class PredictRuleBasedPage extends Component {
 
 
   render() {
-    const { alerts, mode, onlineRunning } = this.state;
+    const { alerts, mode, onlineRunning, activeFilterIPs } = this.state;
     const ruleVerdicts = Array.isArray(this.state.status?.ruleVerdicts) ? this.state.status.ruleVerdicts : [];
-    let rulesCount = ruleVerdicts.length;
-    let verdictsTotal = ruleVerdicts.reduce((sum, r) => sum + Number(r && r.verdicts ? r.verdicts : 0), 0);
-    // Fallback for offline mode where ruleVerdicts may be unavailable: derive from alerts
-    if ((rulesCount === 0 || isNaN(rulesCount)) && Array.isArray(alerts) && alerts.length > 0) {
+
+    let rulesCount, verdictsTotal;
+
+    // When filterIPs is active, ALWAYS derive statistics from filtered alerts (not raw ruleVerdicts)
+    // because ruleVerdicts counts ALL verdicts before IP filtering
+    if (activeFilterIPs && activeFilterIPs.length > 0) {
+      // Derive from filtered alerts
       const uniqueRules = new Set((alerts || []).map(a => String(a && typeof a.code !== 'undefined' ? a.code : '')));
       uniqueRules.delete('');
       rulesCount = uniqueRules.size;
-    }
-    if ((verdictsTotal === 0 || isNaN(verdictsTotal)) && Array.isArray(alerts)) {
-      verdictsTotal = alerts.length;
+      verdictsTotal = (alerts || []).length;
+    } else {
+      // No filter: use ruleVerdicts from server
+      rulesCount = ruleVerdicts.length;
+      verdictsTotal = ruleVerdicts.reduce((sum, r) => sum + Number(r && r.verdicts ? r.verdicts : 0), 0);
+      // Fallback for offline mode where ruleVerdicts may be unavailable: derive from alerts
+      if ((rulesCount === 0 || isNaN(rulesCount)) && Array.isArray(alerts) && alerts.length > 0) {
+        const uniqueRules = new Set((alerts || []).map(a => String(a && typeof a.code !== 'undefined' ? a.code : '')));
+        uniqueRules.delete('');
+        rulesCount = uniqueRules.size;
+      }
+      if ((verdictsTotal === 0 || isNaN(verdictsTotal)) && Array.isArray(alerts)) {
+        verdictsTotal = alerts.length;
+      }
     }
     const timesArr = (this.state.alertSeries || []).map(p => Number(p.time) || 0);
     const minTime = timesArr.length ? Math.min(...timesArr) : null;
@@ -762,6 +920,44 @@ class PredictRuleBasedPage extends Component {
               </Col>
             )}
           </Row>
+
+          {/* ISIM Integration: Filter IPs */}
+          <Row gutter={16} align="middle" style={{ marginTop: 16 }}>
+            <Col flex="none">
+              <Tooltip title="ISIM Integration: Only analyze traffic involving these IPs. Leave empty to analyze all traffic.">
+                <strong style={{ fontSize: '14px' }}>
+                  Filter IPs:
+                </strong>
+              </Tooltip>
+            </Col>
+            <Col flex="auto">
+              <Space>
+                <Input
+                  placeholder="Enter IPs to filter (comma-separated, e.g., 192.168.1.100, 10.0.0.5)"
+                  value={this.state.filterIPsInput}
+                  onChange={(e) => this.setState({ filterIPsInput: e.target.value })}
+                  disabled={this.state.onlineRunning || this.state.offlineLoading}
+                  style={{ width: 400 }}
+                  allowClear
+                />
+                <Tooltip title="Fetch assets from ISIM">
+                  <Button
+                    onClick={this.handleOpenISIMModal}
+                    disabled={this.state.onlineRunning || this.state.offlineLoading}
+                  >
+                    ISIM Assets
+                  </Button>
+                </Tooltip>
+              </Space>
+            </Col>
+            <Col flex="none">
+              <Typography.Text type="secondary" style={{ fontSize: '12px' }}>
+                {this.parseFilterIPs(this.state.filterIPsInput)
+                  ? `${this.parseFilterIPs(this.state.filterIPsInput).length} valid IP(s)`
+                  : 'No filter (all traffic)'}
+              </Typography.Text>
+            </Col>
+          </Row>
         </Card>
 
         <Divider orientation="left">
@@ -772,6 +968,11 @@ class PredictRuleBasedPage extends Component {
           <Card style={{ marginBottom: 24 }}>
             <div style={{ textAlign: 'center', marginBottom: 12 }}>
               <strong style={{ fontSize: 16 }}>Detection Statistics</strong>
+              {this.state.activeFilterIPs && this.state.activeFilterIPs.length > 0 && (
+                <Tag color="blue" style={{ marginLeft: 12 }}>
+                  <FilterOutlined /> Filtered: {this.state.activeFilterIPs.join(', ')}
+                </Tag>
+              )}
             </div>
             <Row gutter={16}>
               <Col span={8}>
@@ -880,6 +1081,94 @@ class PredictRuleBasedPage extends Component {
                   </Typography.Text>
                 </div>
               )}
+            </>
+          )}
+        </Modal>
+
+        {/* ISIM Assets Modal */}
+        <Modal
+          title={
+            <Space>
+              ISIM Assets
+              {this.state.isimConnected === true && <Tag color="green">Connected</Tag>}
+              {this.state.isimConnected === false && <Tag color="red">Disconnected</Tag>}
+            </Space>
+          }
+          open={this.state.isimModalVisible}
+          onCancel={() => this.setState({ isimModalVisible: false })}
+          width={900}
+          footer={[
+            <Button key="cancel" onClick={() => this.setState({ isimModalVisible: false })}>
+              Cancel
+            </Button>,
+            <Button
+              key="add"
+              type="primary"
+              icon={<PlusOutlined />}
+              onClick={this.handleAddSelectedISIMIPs}
+              disabled={this.state.isimSelectedRowKeys.length === 0}
+            >
+              Add Selected IPs ({this.state.isimSelectedRowKeys.length})
+            </Button>
+          ]}
+        >
+          {this.state.isimLoading ? (
+            <div style={{ display: 'flex', justifyContent: 'center', padding: 48 }}>
+              <Spin size="large" tip="Fetching assets from ISIM..." />
+            </div>
+          ) : this.state.isimConnected === false ? (
+            <Alert
+              type="error"
+              message="ISIM Not Available"
+              description="Cannot connect to ISIM service. Please ensure ISIM is running and accessible."
+              showIcon
+            />
+          ) : (
+            <>
+              <Alert
+                type="info"
+                message={`Found ${this.state.isimAssets.length} asset(s)`}
+                showIcon
+                style={{ marginBottom: 16 }}
+              />
+              <Table
+                rowSelection={{
+                  selectedRowKeys: this.state.isimSelectedRowKeys,
+                  onChange: (selectedRowKeys) => this.setState({ isimSelectedRowKeys: selectedRowKeys }),
+                }}
+                dataSource={this.state.isimAssets.map((asset, idx) => ({ key: asset.ip, ...asset, idx: idx + 1 }))}
+                columns={[
+                  { title: '#', dataIndex: 'idx', key: 'idx', width: 50 },
+                  { title: 'IP Address', dataIndex: 'ip', key: 'ip', width: 140 },
+                  {
+                    title: 'Criticality',
+                    dataIndex: 'critical',
+                    key: 'critical',
+                    width: 100,
+                    sorter: (a, b) => b.critical - a.critical,
+                  },
+                  { title: 'Domain', dataIndex: 'domain_names', key: 'domain_names', render: (v) => (Array.isArray(v) ? v.join(', ') : v || '-') },
+                  { title: 'Missions', dataIndex: 'missions', key: 'missions', render: (v) => (Array.isArray(v) ? v.join(', ') : v || '-') },
+                  { title: 'Subnets', dataIndex: 'subnets', key: 'subnets', render: (v) => (Array.isArray(v) ? v.join(', ') : v || '-') },
+                  {
+                    title: 'Action',
+                    key: 'action',
+                    width: 100,
+                    render: (_, record) => (
+                      <Button
+                        size="small"
+                        icon={<PlusOutlined />}
+                        onClick={() => this.handleAddSingleISIMIP(record.ip)}
+                      >
+                        Add
+                      </Button>
+                    )
+                  }
+                ]}
+                size="small"
+                pagination={{ pageSize: 10, showSizeChanger: true, showTotal: (total) => `Total ${total} assets` }}
+                scroll={{ x: 'max-content' }}
+              />
             </>
           )}
         </Modal>
